@@ -8,7 +8,7 @@ OBJ_DIR   := $(BUILD_DIR)/obj
 BIN_DIR   := $(BUILD_DIR)/bin
 
 CC       := gcc
-CPPFLAGS := -I$(INC_DIR) -MMD -MP
+CPPFLAGS := -I$(INC_DIR) -MMD -MP -D_POSIX_C_SOURCE=200809L
 CFLAGS   := -std=c11 -Wall -Wextra -Wpedantic
 LDFLAGS  :=
 LDLIBS   :=

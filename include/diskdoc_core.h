@@ -21,4 +21,6 @@ void print_disk_list(const dd_disk_list *list);
 
 int prompt_disk_choice(const dd_disk_list *list);
 
+void analyze_disk(const char *dev_path);
+
 #endif

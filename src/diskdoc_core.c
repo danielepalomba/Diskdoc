@@ -104,3 +104,27 @@ int prompt_disk_choice(const dd_disk_list *list){
         return (int)choice;
     }
 }
+
+void analyze_disk(const char *dev_path){
+    char command[256];
+
+    snprintf(command, sizeof(command), "smartctl -a -j /dev/%s 2>/dev/null", dev_path);
+    
+    FILE *fp = popen(command, "r");
+    if(fp == NULL){
+        fprintf(stderr, COLOR_RED "Error while running smartctl on %s\n" COLOR_RESET, dev_path);
+        return;
+    }
+
+    puts(COLOR_YELLOW "Analyzing..." COLOR_RESET);
+
+    char buffer[1024];
+    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+        printf("%s", buffer);
+    }
+
+    int status = pclose(fp);
+
+    if(status != 0)
+        printf(COLOR_YELLOW "Warning: smartctl exited with a nonull status.\n" COLOR_RESET);
+}

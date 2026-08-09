@@ -1,5 +1,4 @@
 #include <stdio.h>
-
 #include "diskdoc_core.h"
 
 /* ANSI Colors */
@@ -22,5 +21,7 @@ int main(void){
     }
 
     printf("Selected disk: /dev/%s\n", disks.disks[choice].name);
+    analyze_disk(disks.disks[choice].name);
+
     return 0;
 }
