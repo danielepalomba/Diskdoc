@@ -4,7 +4,9 @@
 #include <dirent.h>
 #include <string.h>
 #include <errno.h>
+#include <stdbool.h>
 
+#include "cJSON.h"
 #include "diskdoc_core.h"
 
 /* ANSI Colors */
@@ -105,8 +107,106 @@ int prompt_disk_choice(const dd_disk_list *list){
     }
 }
 
+static char* read_smartctl_output(FILE *fp){
+    size_t capacity = 16384;
+    size_t length   = 0;
+
+    char *buffer = malloc(capacity);
+    if(buffer == NULL) return NULL;
+
+    for(;;){
+        if(length == capacity - 1){
+            size_t new_capacity = capacity * 2;
+            char *tmp = realloc(buffer, new_capacity);
+            if(tmp == NULL){
+                free(buffer);
+                return NULL;
+            }
+            buffer   = tmp;
+            capacity = new_capacity;
+        }
+
+        size_t n = fread(buffer + length, 1, capacity - 1 - length, fp);
+        length += n;
+
+        if(n == 0){
+            if(ferror(fp)){
+                free(buffer);
+                return NULL;
+            }
+            break; //feof
+        }
+    }
+
+    buffer[length] = '\0';
+    return buffer;
+}
+
+static void parse_nvme(cJSON *root){}
+
+static void parse_ata_ssd(cJSON *root){}
+
+static void parse_ata_hdd(cJSON *root){}
+
+static void parse_disk_data(const char *data){
+    cJSON *root = cJSON_Parse(data);
+
+    if(!root) return;
+
+    // --- Common values ---
+    // Model name
+    cJSON *model_name = cJSON_GetObjectItemCaseSensitive(root, "model_name");
+    if(cJSON_IsString(model_name))
+        printf("Model: %s\n", model_name->valuestring);
+  
+    // Serial number
+    cJSON *serial_number = cJSON_GetObjectItemCaseSensitive(root, "serial_number");
+    if(cJSON_IsString(serial_number)){
+        printf("Serial number: %s\n", serial_number->valuestring);
+    }
+
+    // Firmware version
+    cJSON *firmware_version = cJSON_GetObjectItemCaseSensitive(root, "firmware_version");
+    if(cJSON_IsString(firmware_version)){
+        printf("Firmware versions: %s\n", firmware_version->valuestring);
+    }
+
+    // Smart status
+    cJSON *smart_status = cJSON_GetObjectItemCaseSensitive(root, "smart_status");
+    if(smart_status != NULL){
+        cJSON *passed = cJSON_GetObjectItemCaseSensitive(smart_status, "passed");
+        if(cJSON_IsBool(passed)){
+            if(cJSON_IsTrue(passed))
+                printf("SMART STATUS: passed\n");
+            else
+                printf("SMART STATUS: not passed\n");
+        }
+    }
+
+    // Check the device type
+    cJSON *device = cJSON_GetObjectItemCaseSensitive(root, "device");
+    if(device != NULL){
+        cJSON *protocol = cJSON_GetObjectItemCaseSensitive(device, "protocol");
+
+        if(cJSON_IsString(protocol)){
+            if(strcmp(protocol->valuestring, "NVMe") == 0){
+                parse_nvme(root);
+            }else if(strcmp(protocol->valuestring, "ATA") == 0){
+                cJSON *rotation = cJSON_GetObjectItemCaseSensitive(root, "rotation_rate");
+
+                if((cJSON_IsNumber(rotation) && rotation->valueint == 0) || rotation == NULL)
+                    parse_ata_ssd(root);
+                else
+                    parse_ata_hdd(root);
+            }
+        }
+    }
+    cJSON_Delete(root);
+}
+
 void analyze_disk(const char *dev_path){
     char command[256];
+    int status = 0;
 
     snprintf(command, sizeof(command), "smartctl -a -j /dev/%s 2>/dev/null", dev_path);
     
@@ -117,13 +217,19 @@ void analyze_disk(const char *dev_path){
     }
 
     puts(COLOR_YELLOW "Analyzing..." COLOR_RESET);
+    
+    char *data = read_smartctl_output(fp);
+    parse_disk_data(data);
 
-    char buffer[1024];
-    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-        printf("%s", buffer);
+    status = pclose(fp);
+
+    if(data == NULL){
+        fprintf(stderr, COLOR_RED "Could not read smartctl output for %s\n" COLOR_RESET, dev_path);
+        return;
     }
 
-    int status = pclose(fp);
+    //printf("%s\n", data);
+    free(data);
 
     if(status != 0)
         printf(COLOR_YELLOW "Warning: smartctl exited with a nonull status.\n" COLOR_RESET);

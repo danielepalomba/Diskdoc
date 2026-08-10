@@ -1,4 +1,5 @@
 build/
+other/
 
 *.o
 *.obj
