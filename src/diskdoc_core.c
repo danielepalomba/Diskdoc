@@ -4,7 +4,6 @@
 #include <dirent.h>
 #include <string.h>
 #include <errno.h>
-#include <stdbool.h>
 
 #include "cJSON.h"
 #include "diskdoc_core.h"
@@ -170,6 +169,27 @@ static void parse_disk_data(const char *data){
     if(cJSON_IsString(firmware_version)){
         printf("Firmware versions: %s\n", firmware_version->valuestring);
     }
+    
+    // User capacity
+    cJSON *user_capacity = cJSON_GetObjectItemCaseSensitive(root, "user_capacity");
+    if(user_capacity != NULL){
+        cJSON *bytes = cJSON_GetObjectItemCaseSensitive(user_capacity, "bytes");
+        if(cJSON_IsNumber(bytes)){
+            //GB is what the vendor advertises, GiB is what the OS reports
+            double capacity = cJSON_GetNumberValue(bytes);
+            printf("Capacity: %.0f GB (%.1f GiB)\n",
+                   capacity / 1e9, capacity / (1024.0 * 1024.0 * 1024.0));
+        }
+    }
+
+    // Temperature
+    cJSON *temperature = cJSON_GetObjectItemCaseSensitive(root, "temperature");
+    if(temperature != NULL){
+        cJSON *current_temp = cJSON_GetObjectItemCaseSensitive(temperature, "current");
+        if(cJSON_IsNumber(current_temp)){
+            printf("Temperature: %.1fC°\n", cJSON_GetNumberValue(current_temp));
+        }
+    }
 
     // Smart status
     cJSON *smart_status = cJSON_GetObjectItemCaseSensitive(root, "smart_status");
@@ -177,9 +197,22 @@ static void parse_disk_data(const char *data){
         cJSON *passed = cJSON_GetObjectItemCaseSensitive(smart_status, "passed");
         if(cJSON_IsBool(passed)){
             if(cJSON_IsTrue(passed))
-                printf("SMART STATUS: passed\n");
+                 printf("SMART STATUS: " COLOR_GREEN "passed" COLOR_RESET "\n");
             else
-                printf("SMART STATUS: not passed\n");
+                printf("SMART STATUS: " COLOR_RED "not passed" COLOR_RESET "\n");
+        }
+    }
+
+    // Check SMART support status
+    cJSON *smart_support = cJSON_GetObjectItemCaseSensitive(root, "smart_support");
+    if(smart_support != NULL){
+        cJSON *available = cJSON_GetObjectItemCaseSensitive(smart_support, "available");
+        cJSON *enabled = cJSON_GetObjectItemCaseSensitive(smart_support, "enabled");
+        
+        if(cJSON_IsBool(available) && cJSON_IsBool(enabled)){
+            if(cJSON_IsTrue(available) && cJSON_IsFalse(enabled))
+                printf(COLOR_YELLOW "Smart support is available but it's not enabled."
+                        "The values displayed may not be current\n" COLOR_RESET);
         }
     }
 
