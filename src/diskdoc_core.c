@@ -9,7 +9,7 @@
 #include "cJSON.h"
 #include "diskdoc_core.h"
 
-/* One NVMe data unit is 1000 sectors of 512 bytes */
+/* NVMe data unit is 1000 sectors of 512 bytes */
 #define DD_NVME_DATA_UNIT 512000.0
 
 /* smartctl reports its outcome as a bitmask.
@@ -24,7 +24,7 @@
 #define DD_SMARTCTL_FINDINGS 0xF8
 #define DD_SMARTCTL_OPEN_FAILED 0x02
 
-#define DD_FIELD "  %-19s"
+#define DD_FIELD "  %-24s"
 
 /* ANSI Colors */
 #define COLOR_RED     "\x1b[31m"
@@ -32,6 +32,16 @@
 #define COLOR_YELLOW  "\x1b[33m"
 #define COLOR_RESET   "\x1b[0m"
 
+static void parse_nvme(cJSON *root);
+static void parse_ata_ssd(cJSON *root);
+static void parse_ata_hdd(cJSON *root);
+
+/* ######################################################################
+   CORE 
+   ###################################################################### */
+
+/* Fills the list with the physical disks found under /sys/block.
+   Returns 0 on success, -1 when the directory cannot be read. */
 int scan_physical_disks(dd_disk_list *list){
     list->count = 0;
 
@@ -70,6 +80,7 @@ int scan_physical_disks(dd_disk_list *list){
     return 0;
 }
 
+/* Prints the scanned disks, numbered so the user can pick one */
 void print_disk_list(const dd_disk_list *list){
     if(list->count == 0){
         puts(COLOR_RED "No physical disk found." COLOR_RESET);
@@ -80,6 +91,8 @@ void print_disk_list(const dd_disk_list *list){
         printf(COLOR_GREEN "[%zu]Device:" COLOR_RESET " /dev/%s\n", i, list->disks[i].name);
 }
 
+/* Asks which disk to analyze until the answer is a valid index.
+   Returns the chosen index, or -1 when the user quits. */
 int prompt_disk_choice(const dd_disk_list *list){
     char line[64];
 
@@ -124,6 +137,8 @@ int prompt_disk_choice(const dd_disk_list *list){
     }
 }
 
+/* Reads a whole pipe into a buffer that grows as needed.
+   Returns a string the caller has to free, or NULL on error. */
 static char* read_smartctl_output(FILE *fp){
     size_t capacity = 16384;
     size_t length   = 0;
@@ -159,6 +174,7 @@ static char* read_smartctl_output(FILE *fp){
     return buffer;
 }
 
+/* Prints a section title underlined with dashes */
 static void print_section(const char *title){
     printf("\n" COLOR_GREEN "%s" COLOR_RESET "\n", title);
 
@@ -166,101 +182,7 @@ static void print_section(const char *title){
     putchar('\n');
 }
 
-static void print_critical_warning(unsigned warning){
-    static const char *const alarms[] = {
-        "available spare is below the threshold",
-        "temperature is outside the critical thresholds",
-        "NVM subsystem reliability is degraded",
-        "media has been placed in read only mode",
-        "volatile memory backup device has failed",
-        "persistent memory region is read only or unreliable",
-    };
-
-    if(warning == 0){
-        printf(DD_FIELD COLOR_GREEN "none" COLOR_RESET "\n", "Critical warnings");
-        return;
-    }
-
-    printf(DD_FIELD COLOR_RED "0x%02x" COLOR_RESET "\n", "Critical warnings", warning);
-
-    for(size_t i = 0; i < sizeof alarms / sizeof alarms[0]; i++)
-        if(warning & (1u << i))
-            printf(DD_FIELD COLOR_RED "- %s" COLOR_RESET "\n", "", alarms[i]);
-
-    if(warning & 0xC0)
-        printf(DD_FIELD COLOR_RED "- unknown flag set by the device" COLOR_RESET "\n", "");
-}
-
-static void parse_nvme(cJSON *root){
-    cJSON *log = cJSON_GetObjectItemCaseSensitive(root, "nvme_smart_health_information_log");
-    if(log == NULL) return;
-
-    print_section("Wear and reliability");
-
-    // Critical warning
-    cJSON *c_warning = cJSON_GetObjectItemCaseSensitive(log, "critical_warning");
-    if(cJSON_IsNumber(c_warning))
-        print_critical_warning((unsigned)cJSON_GetNumberValue(c_warning));
-
-    // Percentage used
-    cJSON *percentage_used = cJSON_GetObjectItemCaseSensitive(log, "percentage_used");
-    if(cJSON_IsNumber(percentage_used))
-        printf(DD_FIELD "%d%%\n", "Life used", (int)cJSON_GetNumberValue(percentage_used));
-
-    // Reserve blocks
-    cJSON *available_spare = cJSON_GetObjectItemCaseSensitive(log, "available_spare");
-    cJSON *available_spare_thr = cJSON_GetObjectItemCaseSensitive(log, "available_spare_threshold");
-    if(cJSON_IsNumber(available_spare) && cJSON_IsNumber(available_spare_thr)){
-        double spare = cJSON_GetNumberValue(available_spare);
-        double threshold = cJSON_GetNumberValue(available_spare_thr);
-
-        printf(DD_FIELD "%s%.0f%%" COLOR_RESET " (threshold %.0f%%)\n", "Available spare",
-                spare < threshold ? COLOR_RED : "", spare, threshold);
-
-        if(spare < threshold)
-            printf(DD_FIELD COLOR_RED "the disk has run out of replacement blocks\n"
-                    COLOR_RESET, "");
-    }
-
-    // Media errors
-    cJSON *media_errors = cJSON_GetObjectItemCaseSensitive(log, "media_errors");
-    if(cJSON_IsNumber(media_errors)){
-        double errors = cJSON_GetNumberValue(media_errors);
-        printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Media errors",
-                errors != 0 ? COLOR_YELLOW : "", errors);
-    }
-
-    // Err logs
-    cJSON *num_err_log = cJSON_GetObjectItemCaseSensitive(log, "num_err_log_entries");
-    if(cJSON_IsNumber(num_err_log))
-        printf(DD_FIELD "%zu\n", "Error log entries", (size_t)cJSON_GetNumberValue(num_err_log));
-
-    print_section("Usage");
-
-    // Power
-    cJSON *p_on_hours = cJSON_GetObjectItemCaseSensitive(log, "power_on_hours");
-    cJSON *p_cycles = cJSON_GetObjectItemCaseSensitive(log, "power_cycles");
-    if(cJSON_IsNumber(p_on_hours) && cJSON_IsNumber(p_cycles)){
-        double hours = cJSON_GetNumberValue(p_on_hours);
-
-        printf(DD_FIELD "%.0f h (%.1f years)\n", "Power on time", hours, hours / (24 * 365.0));
-        printf(DD_FIELD "%zu\n", "Power cycles", (size_t)cJSON_GetNumberValue(p_cycles));
-    }
-
-    cJSON *units_written = cJSON_GetObjectItemCaseSensitive(log, "data_units_written");
-    cJSON *units_read = cJSON_GetObjectItemCaseSensitive(log, "data_units_read");
-    if(cJSON_IsNumber(units_written) && cJSON_IsNumber(units_read)){
-        printf(DD_FIELD "%.2f TB\n", "Data written",
-                cJSON_GetNumberValue(units_written) * DD_NVME_DATA_UNIT / 1e12);
-        printf(DD_FIELD "%.2f TB\n", "Data read",
-                cJSON_GetNumberValue(units_read) * DD_NVME_DATA_UNIT / 1e12);
-    }
-}
-
-static void parse_ata_ssd(cJSON *root){}
-
-static void parse_ata_hdd(cJSON *root){}
-
+/* Prints the messages smartctl attached to its report, in the given color */
 static void print_smartctl_messages(cJSON *smartctl, FILE *stream, const char *color){
     cJSON *messages = cJSON_GetObjectItemCaseSensitive(smartctl, "messages");
     if(!cJSON_IsArray(messages)) return;
@@ -273,7 +195,8 @@ static void print_smartctl_messages(cJSON *smartctl, FILE *stream, const char *c
     }
 }
 
-//returns 1 when the report can be trusted, 0 when smartctl produced no report
+/* Decodes the smartctl exit bitmask and prints what it reported.
+   Returns 1 when the report can be trusted, 0 when there is no report at all. */
 static int check_smartctl_status(cJSON *root){
     static const char *const findings[] = {
         "SMART status reports the disk is FAILING",         //bit 3
@@ -321,6 +244,8 @@ static int check_smartctl_status(cJSON *root){
     return 1;
 }
 
+/* Prints the values common to every disk, then hands the report to the
+   parser that matches its protocol */
 static void parse_disk_data(const char *data){
     cJSON *root = cJSON_Parse(data);
 
@@ -416,11 +341,12 @@ static void parse_disk_data(const char *data){
     cJSON_Delete(root);
 }
 
+/* Runs smartctl on the given device and prints the report it returns */
 void analyze_disk(const char *dev_path){
     char command[256];
     int status = 0;
 
-    snprintf(command, sizeof(command), "smartctl -a -j /dev/%s 2>/dev/null", dev_path);
+    snprintf(command, sizeof(command), "smartctl -x -j /dev/%s 2>/dev/null", dev_path);
     
     FILE *fp = popen(command, "r");
     if(fp == NULL){
@@ -448,3 +374,327 @@ void analyze_disk(const char *dev_path){
     parse_disk_data(data);
     free(data);
 }
+
+/* ######################################################################
+   NVME
+   ###################################################################### */
+
+/* Decodes the NVMe critical warning bitmask into readable alarms */
+static void print_critical_warning(unsigned warning){
+    static const char *const alarms[] = {
+        "available spare is below the threshold",
+        "temperature is outside the critical thresholds",
+        "NVM subsystem reliability is degraded",
+        "media has been placed in read only mode",
+        "volatile memory backup device has failed",
+        "persistent memory region is read only or unreliable",
+    };
+
+    if(warning == 0){
+        printf(DD_FIELD COLOR_GREEN "none" COLOR_RESET "\n", "Critical warnings");
+        return;
+    }
+
+    printf(DD_FIELD COLOR_RED "0x%02x" COLOR_RESET "\n", "Critical warnings", warning);
+
+    for(size_t i = 0; i < sizeof alarms / sizeof alarms[0]; i++)
+        if(warning & (1u << i))
+            printf(DD_FIELD COLOR_RED "- %s" COLOR_RESET "\n", "", alarms[i]);
+
+    if(warning & 0xC0)
+        printf(DD_FIELD COLOR_RED "- unknown flag set by the device" COLOR_RESET "\n", "");
+}
+
+/* Prints wear, reliability and usage of an NVMe disk from its health log */
+static void parse_nvme(cJSON *root){
+    cJSON *log = cJSON_GetObjectItemCaseSensitive(root, "nvme_smart_health_information_log");
+    if(log == NULL) return;
+
+    print_section("Wear and reliability");
+
+    // Critical warning
+    cJSON *c_warning = cJSON_GetObjectItemCaseSensitive(log, "critical_warning");
+    if(cJSON_IsNumber(c_warning))
+        print_critical_warning((unsigned)cJSON_GetNumberValue(c_warning));
+
+    // Percentage used
+    cJSON *percentage_used = cJSON_GetObjectItemCaseSensitive(log, "percentage_used");
+    if(cJSON_IsNumber(percentage_used))
+        printf(DD_FIELD "%d%%\n", "Life usage", (int)cJSON_GetNumberValue(percentage_used));
+
+    // Reserve blocks
+    cJSON *available_spare = cJSON_GetObjectItemCaseSensitive(log, "available_spare");
+    cJSON *available_spare_thr = cJSON_GetObjectItemCaseSensitive(log, "available_spare_threshold");
+    if(cJSON_IsNumber(available_spare) && cJSON_IsNumber(available_spare_thr)){
+        double spare = cJSON_GetNumberValue(available_spare);
+        double threshold = cJSON_GetNumberValue(available_spare_thr);
+
+        printf(DD_FIELD "%s%.0f%%" COLOR_RESET " (threshold %.0f%%)\n", "Available spare",
+                spare < threshold ? COLOR_RED : "", spare, threshold);
+
+        if(spare < threshold)
+            printf(DD_FIELD COLOR_RED "the disk has run out of replacement blocks\n"
+                    COLOR_RESET, "");
+    }
+
+    // Media errors
+    cJSON *media_errors = cJSON_GetObjectItemCaseSensitive(log, "media_errors");
+    if(cJSON_IsNumber(media_errors)){
+        double errors = cJSON_GetNumberValue(media_errors);
+        printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Media errors",
+                errors != 0 ? COLOR_YELLOW : "", errors);
+    }
+
+    // Err logs
+    cJSON *num_err_log = cJSON_GetObjectItemCaseSensitive(log, "num_err_log_entries");
+    if(cJSON_IsNumber(num_err_log))
+        printf(DD_FIELD "%zu\n", "Error log entries", (size_t)cJSON_GetNumberValue(num_err_log));
+
+    print_section("Usage");
+
+    // Power
+    cJSON *p_on_hours = cJSON_GetObjectItemCaseSensitive(log, "power_on_hours");
+    cJSON *p_cycles = cJSON_GetObjectItemCaseSensitive(log, "power_cycles");
+    if(cJSON_IsNumber(p_on_hours) && cJSON_IsNumber(p_cycles)){
+        double hours = cJSON_GetNumberValue(p_on_hours);
+
+        printf(DD_FIELD "%.0f h (%.1f years)\n", "Power on hours", hours, hours / (24 * 365.0));
+        printf(DD_FIELD "%zu\n", "Power cycles", (size_t)cJSON_GetNumberValue(p_cycles));
+    }
+
+    cJSON *units_written = cJSON_GetObjectItemCaseSensitive(log, "data_units_written");
+    cJSON *units_read = cJSON_GetObjectItemCaseSensitive(log, "data_units_read");
+    if(cJSON_IsNumber(units_written) && cJSON_IsNumber(units_read)){
+        printf(DD_FIELD "%.2f TB\n", "Data written",
+                cJSON_GetNumberValue(units_written) * DD_NVME_DATA_UNIT / 1e12);
+        printf(DD_FIELD "%.2f TB\n", "Data read",
+                cJSON_GetNumberValue(units_read) * DD_NVME_DATA_UNIT / 1e12);
+    }
+}
+
+/* ######################################################################
+   SATA COMMON
+   ###################################################################### */
+
+/* Looks up an attribute by id, as its position in the table is not fixed.
+   name_part guards the vendor specific ids, NULL skips that check. */
+static cJSON *find_ata_attribute(cJSON *table, int id, const char *name_part){
+    cJSON *attribute;
+    cJSON_ArrayForEach(attribute, table){
+        cJSON *attr_id = cJSON_GetObjectItemCaseSensitive(attribute, "id");
+        if(!cJSON_IsNumber(attr_id) || (int)cJSON_GetNumberValue(attr_id) != id)
+            continue;
+
+        if(name_part != NULL){
+            cJSON *name = cJSON_GetObjectItemCaseSensitive(attribute, "name");
+            if(!cJSON_IsString(name) || strstr(name->valuestring, name_part) == NULL)
+                return NULL; //the id means something else on this disk
+        }
+        return attribute;
+    }
+    return NULL;
+}
+
+/* Reads the raw counter of an attribute into out.
+   Returns 0 when the disk does not report that attribute. */
+static int ata_attribute_raw(cJSON *table, int id, const char *name_part, double *out){
+    cJSON *attribute = find_ata_attribute(table, id, name_part);
+
+    cJSON *raw = cJSON_GetObjectItemCaseSensitive(attribute, "raw");
+    cJSON *raw_value = cJSON_GetObjectItemCaseSensitive(raw, "value");
+    if(!cJSON_IsNumber(raw_value)) return 0;
+
+    *out = cJSON_GetNumberValue(raw_value);
+    return 1;
+}
+
+/* Reads the normalized value of an attribute: for the wear attributes that is
+   the percentage of life left, while the raw side holds a vendor counter. */
+static int ata_attribute_value(cJSON *table, int id, const char *name_part, double *out){
+    cJSON *attribute = find_ata_attribute(table, id, name_part);
+
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(attribute, "value");
+    if(!cJSON_IsNumber(value)) return 0;
+
+    *out = cJSON_GetNumberValue(value);
+    return 1;
+}
+
+/* Looks up a device statistic by name across every page of the -x log.
+   Returns 0 when the disk does not report it or does not keep it up to date. */
+static int find_device_statistic(cJSON *root, const char *name, double *out){
+    cJSON *statistics = cJSON_GetObjectItemCaseSensitive(root, "ata_device_statistics");
+    cJSON *pages = cJSON_GetObjectItemCaseSensitive(statistics, "pages");
+
+    cJSON *page;
+    cJSON_ArrayForEach(page, pages){
+        cJSON *table = cJSON_GetObjectItemCaseSensitive(page, "table");
+
+        cJSON *entry;
+        cJSON_ArrayForEach(entry, table){
+            cJSON *entry_name = cJSON_GetObjectItemCaseSensitive(entry, "name");
+            if(!cJSON_IsString(entry_name) || strcmp(entry_name->valuestring, name) != 0)
+                continue;
+
+            /* a statistic the device does not keep is reported as zero */
+            cJSON *flags = cJSON_GetObjectItemCaseSensitive(entry, "flags");
+            if(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(flags, "valid"))) return 0;
+
+            cJSON *value = cJSON_GetObjectItemCaseSensitive(entry, "value");
+            if(!cJSON_IsNumber(value)) return 0;
+
+            *out = cJSON_GetNumberValue(value);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Bytes the disk has moved in its life, from the statistic if it has one.
+   Returns 0 when nothing reports them in a unit we can name. */
+static int ata_data_moved(cJSON *root, cJSON *table, const char *statistic,
+                          int id, double *bytes){
+    cJSON *block_size = cJSON_GetObjectItemCaseSensitive(root, "logical_block_size");
+    double sector = cJSON_IsNumber(block_size) ? cJSON_GetNumberValue(block_size) : 512.0;
+
+    double sectors;
+    if(find_device_statistic(root, statistic, &sectors)){
+        *bytes = sectors * sector;
+        return 1;
+    }
+
+    cJSON *attribute = find_ata_attribute(table, id, NULL);
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(attribute, "name");
+    cJSON *raw = cJSON_GetObjectItemCaseSensitive(attribute, "raw");
+    cJSON *raw_value = cJSON_GetObjectItemCaseSensitive(raw, "value");
+    if(!cJSON_IsString(name) || !cJSON_IsNumber(raw_value)) return 0;
+
+    double count = cJSON_GetNumberValue(raw_value);
+
+    if(strstr(name->valuestring, "GiB") != NULL)
+        *bytes = count * (1024.0 * 1024.0 * 1024.0);
+    else if(strstr(name->valuestring, "LBA") != NULL ||
+            strstr(name->valuestring, "Sector") != NULL)
+        *bytes = count * sector;
+    else
+        return 0; //an unit we cannot name
+
+    return 1;
+}
+
+/* ######################################################################
+   SATA SSD
+   ###################################################################### */
+
+/* How much of the rated write endurance is still available */
+static void print_ata_life_left(cJSON *root, cJSON *table){
+   static const struct {
+        int id;
+        const char *name;
+    } wear_attributes[] = {
+        { 231, "SSD_Life_Left" },
+        { 245, "SSD_Life_Left" },
+        { 233, "Media_Wearout_Indicator" },
+        { 202, "Percent_Lifetime_Remain" },
+        { 169, "Remaining_Lifetime_Perc" },
+        { 177, "Wear_Leveling_Count" },
+    };
+
+    double left;
+
+    if(find_device_statistic(root, "Percentage Used Endurance Indicator", &left)){
+        left = 100.0 - left;
+        if(left < 0) left = 0; 
+    }else {
+        size_t i;
+        for(i = 0; i < sizeof wear_attributes / sizeof wear_attributes[0]; i++)
+            if(ata_attribute_value(table, wear_attributes[i].id,
+                                   wear_attributes[i].name, &left))
+                break;
+
+        //the disk reports its wear in none of the ways we know
+        if(i == sizeof wear_attributes / sizeof wear_attributes[0]) return;
+    }
+
+    const char *color = "";
+    if(left <= 10) color = COLOR_RED;
+    else if(left <= 20) color = COLOR_YELLOW;
+
+    printf(DD_FIELD "%s%.0f%%" COLOR_RESET "\n", "Life left", color, left);
+}
+
+/* Prints self test outcome, wear and error counters of an ATA SSD */
+static void parse_ata_ssd(cJSON *root){
+    
+    print_section("Wear and reliability");
+    // Self test
+    cJSON *ata_smart_data = cJSON_GetObjectItemCaseSensitive(root, "ata_smart_data");
+    if(ata_smart_data != NULL){
+        cJSON *self_test = cJSON_GetObjectItemCaseSensitive(ata_smart_data, "self_test");
+        if(self_test != NULL){ 
+            cJSON *test_status = cJSON_GetObjectItemCaseSensitive(self_test, "status");
+            if(test_status != NULL){
+                cJSON *passed = cJSON_GetObjectItemCaseSensitive(test_status, "passed");
+                if(cJSON_IsTrue(passed))
+                    printf(DD_FIELD COLOR_GREEN "passed\n" COLOR_RESET, "Self test");
+                else
+                    printf(DD_FIELD COLOR_RED "not passed\n" COLOR_RESET, "Self test");          
+            } 
+        }
+    }
+
+    cJSON *attributes = cJSON_GetObjectItemCaseSensitive(root, "ata_smart_attributes");
+    cJSON *table = cJSON_GetObjectItemCaseSensitive(attributes, "table");
+
+    // Wearout
+    print_ata_life_left(root, table);
+
+    if(cJSON_IsArray(table)){
+        double count;
+
+        // Reallocated sectors
+        if(ata_attribute_raw(table, 5, NULL, &count))
+            printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Reallocated sectors",
+                    count != 0 ? COLOR_YELLOW : "", count);
+
+        /* Program and erase failures: most controllers report them as 171/172,
+           Samsung and a few others as 181/182. A disk exposes one pair or the
+           other, so the first id that answers is the one to trust. */
+        if(ata_attribute_raw(table, 171, "Program_Fail", &count) ||
+           ata_attribute_raw(table, 181, "Program_Fail", &count))
+            printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Program failures",
+                    count != 0 ? COLOR_YELLOW : "", count);
+
+        if(ata_attribute_raw(table, 172, "Erase_Fail", &count) ||
+           ata_attribute_raw(table, 182, "Erase_Fail", &count))
+            printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Erase failures",
+                    count != 0 ? COLOR_YELLOW : "", count);
+        
+        if(ata_attribute_raw(table, 187, "Reported_Uncorrect", &count))
+            printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Reported uncorrect",
+                    count != 0 ? COLOR_YELLOW : "", count);
+        
+        print_section("Usage");
+
+        if(ata_attribute_raw(table, 9, "Power_On_Hours", &count))
+            printf(DD_FIELD "%.0f\n", "Power on hours", count);
+        
+        if(ata_attribute_raw(table, 12, "Power_Cycle_Count", &count))
+            printf(DD_FIELD "%.0f\n", "Power cycle count", count);
+    }
+
+    // Data moved
+    double bytes;
+    if(ata_data_moved(root, table, "Logical Sectors Written", 241, &bytes))
+        printf(DD_FIELD "%.2f TB\n", "Data written", bytes / 1e12);
+
+    if(ata_data_moved(root, table, "Logical Sectors Read", 242, &bytes))
+        printf(DD_FIELD "%.2f TB\n", "Data read", bytes / 1e12);
+}
+
+/* ######################################################################
+   SATA HDD
+   ###################################################################### */
+
+/* Same for a spinning disk, whose health lives in different attributes */
+static void parse_ata_hdd(cJSON *root){}
