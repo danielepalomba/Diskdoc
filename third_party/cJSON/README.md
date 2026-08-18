@@ -1,11 +1,11 @@
 # cJSON
 
-Codice di terzi, non nostro: non va modificato e non viene compilato con i
-warning del progetto (vedi `TP_CFLAGS` nel Makefile).
+Third-party code: do not modify it and do not compile with the
+project warnings (see `TP_CFLAGS` in the Makefile).
 
 - Upstream: https://github.com/DaveGamble/cJSON
-- Versione importata: 1.7.19
-- Licenza: MIT (vedi intestazione di `cJSON.c` / `cJSON.h`)
+- Imported version: 1.7.19
+- License: MIT (see `cJSON.c` / `cJSON.h` header)
 
-Per aggiornarlo: sostituire `cJSON.c` e `cJSON.h` con quelli della nuova
-release in un commit separato, che tocchi solo questa cartella.
+To update: replace `cJSON.c` and `cJSON.h` with those from the new
+release in a separate commit, affecting only this folder.
