@@ -582,6 +582,16 @@ static int ata_data_moved(cJSON *root, cJSON *table, const char *statistic,
     return 1;
 }
 
+/* Prints a byte count in the largest unit that keeps it readable */
+static void print_data_moved(const char *label, double bytes){
+    if(bytes >= 1e12)
+        printf(DD_FIELD "%.2f TB\n", label, bytes / 1e12);
+    else if(bytes >= 1e9)
+        printf(DD_FIELD "%.2f GB\n", label, bytes / 1e9);
+    else
+        printf(DD_FIELD "%.2f MB\n", label, bytes / 1e6);
+}
+
 /* ######################################################################
    SATA SSD
    ###################################################################### */
@@ -676,20 +686,21 @@ static void parse_ata_ssd(cJSON *root){
         
         print_section("Usage");
 
-        if(ata_attribute_raw(table, 9, "Power_On_Hours", &count))
+        if(find_device_statistic(root, "Power-on Hours", &count))
             printf(DD_FIELD "%.0f\n", "Power on hours", count);
-        
-        if(ata_attribute_raw(table, 12, "Power_Cycle_Count", &count))
+
+        if(find_device_statistic(root, "Lifetime Power-On Resets", &count))
             printf(DD_FIELD "%.0f\n", "Power cycle count", count);
+
+
+        // Data moved
+        double bytes;
+        if(ata_data_moved(root, table, "Logical Sectors Written", 241, &bytes))
+            print_data_moved("Data written", bytes);
+
+        if(ata_data_moved(root, table, "Logical Sectors Read", 242, &bytes))
+            print_data_moved("Data read", bytes);
     }
-
-    // Data moved
-    double bytes;
-    if(ata_data_moved(root, table, "Logical Sectors Written", 241, &bytes))
-        printf(DD_FIELD "%.2f TB\n", "Data written", bytes / 1e12);
-
-    if(ata_data_moved(root, table, "Logical Sectors Read", 242, &bytes))
-        printf(DD_FIELD "%.2f TB\n", "Data read", bytes / 1e12);
 }
 
 /* ######################################################################
@@ -697,4 +708,72 @@ static void parse_ata_ssd(cJSON *root){
    ###################################################################### */
 
 /* Same for a spinning disk, whose health lives in different attributes */
-static void parse_ata_hdd(cJSON *root){}
+static void parse_ata_hdd(cJSON *root){
+    print_section("Wear and reliability");
+    
+    cJSON *attributes = cJSON_GetObjectItemCaseSensitive(root, "ata_smart_attributes");
+    cJSON *table = cJSON_GetObjectItemCaseSensitive(attributes, "table");
+
+    if(cJSON_IsArray(table)){
+        double count; 
+
+         if(ata_attribute_raw(table, 5, NULL, &count))
+             printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Reallocated sectors",
+                count != 0 ? COLOR_YELLOW : "", count);
+
+        if(ata_attribute_raw(table, 187, NULL, &count))
+             printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Reported uncorrect",
+                count != 0 ? COLOR_YELLOW : "", count);
+
+        if(ata_attribute_raw(table, 188, NULL, &count))
+             printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Command timeout",
+                count != 0 ? COLOR_YELLOW : "", count);
+
+        if(ata_attribute_raw(table, 197, NULL, &count))
+             printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Current pending sector",
+                count != 0 ? COLOR_YELLOW : "", count);
+
+        if(ata_attribute_raw(table, 198, NULL, &count))
+             printf(DD_FIELD "%s%.0f" COLOR_RESET "\n", "Offline uncorrectable",
+                count != 0 ? COLOR_YELLOW : "", count);
+
+        print_section("Usage");
+
+        if(find_device_statistic(root, "Power-on Hours", &count))
+            printf(DD_FIELD "%.0f\n", "Power on hours", count);
+
+        if(find_device_statistic(root, "Lifetime Power-On Resets", &count))
+            printf(DD_FIELD "%.0f\n", "Power cycle count", count);
+
+        // Data moved
+        double bytes;
+        if(ata_data_moved(root, table, "Logical Sectors Written", 241, &bytes))
+            print_data_moved("Data written", bytes);
+
+        if(ata_data_moved(root, table, "Logical Sectors Read", 242, &bytes))
+            print_data_moved("Data read", bytes);
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
