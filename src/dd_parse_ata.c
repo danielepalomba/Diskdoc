@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 
 #include "cJSON.h"
 #include "dd_parse_ata.h"
@@ -53,11 +54,22 @@ static int ata_attribute_raw(const dd_ata *ata, int id, const char *name_part,
     cJSON *attribute = find_ata_attribute(ata, id, name_part);
 
     cJSON *raw = cJSON_GetObjectItemCaseSensitive(attribute, "raw");
-    cJSON *raw_value = cJSON_GetObjectItemCaseSensitive(raw, "value");
-    if(!cJSON_IsNumber(raw_value)) return 0;
-
-    *out = cJSON_GetNumberValue(raw_value);
-    return 1;
+    cJSON *raw_string = cJSON_GetObjectItemCaseSensitive(raw, "string");
+    
+    if(!cJSON_IsString(raw_string)){
+        cJSON *raw_value = cJSON_GetObjectItemCaseSensitive(raw, "value");
+        if(!cJSON_IsNumber(raw_value)) return 0;
+        *out = cJSON_GetNumberValue(raw_value);
+        return 1;
+    }else{
+        char *end;
+        double decoded = strtod(raw_string->valuestring, &end);
+        if(end != raw_string->valuestring){
+            *out = decoded;
+            return 1;
+        }
+        return 0;
+    }
 }
 
 /* Reads the normalized value of an attribute (percentage of life left, for
@@ -112,20 +124,20 @@ static int ata_data_moved(const dd_ata *ata, const char *statistic,
         *bytes = sectors * ata->sector_size;
         return 1;
     }
-
+    
+    double count;
     cJSON *attribute = find_ata_attribute(ata, id, NULL);
     cJSON *name = cJSON_GetObjectItemCaseSensitive(attribute, "name");
-    cJSON *raw = cJSON_GetObjectItemCaseSensitive(attribute, "raw");
-    cJSON *raw_value = cJSON_GetObjectItemCaseSensitive(raw, "value");
-    if(!cJSON_IsString(name) || !cJSON_IsNumber(raw_value)) return 0;
+    
+    if(!cJSON_IsString(name)) return 0;
 
-    double count = cJSON_GetNumberValue(raw_value);
+    if(!ata_attribute_raw(ata, id, NULL, &count)) return 0;
 
     if(strstr(name->valuestring, "GiB") != NULL)
         *bytes = count * (1024.0 * 1024.0 * 1024.0);
     else if(strstr(name->valuestring, "LBA") != NULL ||
-            strstr(name->valuestring, "Sector") != NULL)
-        *bytes = count * ata->sector_size;
+        strstr(name->valuestring, "Sector") != NULL)
+    *bytes = count * ata->sector_size;
     else
         return 0;
 
