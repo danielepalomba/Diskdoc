@@ -65,10 +65,9 @@ static int analyze_all(bool print){
 
 static int analyze_device(char *dev, bool print){
     const char *name = dev;
+    dd_disk_list disks;
 
     if(name == NULL){
-        dd_disk_list disks;
-
         puts(COLOR_YELLOW "Scanning physical disks..." COLOR_RESET);
 
         if(scan_physical_disks(&disks) != 0) return dd_exit_code(DD_ALARM);

@@ -1,5 +1,8 @@
 NAME      := diskdoc
 
+PREFIX    := /usr/local
+BINDIR    := $(PREFIX)/bin
+
 SRC_DIR   := src
 INC_DIR   := include
 TP_DIR    := third_party
@@ -14,7 +17,6 @@ CPPFLAGS := -I$(INC_DIR) $(TP_INCS) -MMD -MP -D_POSIX_C_SOURCE=200809L
 LDFLAGS  :=
 LDLIBS   :=
 
-# Flag comuni a tutto il codice compilato, nostro e di terzi
 BASE_CFLAGS := -std=c11
 
 ifeq ($(DEBUG),1)
@@ -24,8 +26,6 @@ else
   BASE_CFLAGS += -O2
 endif
 
-# Il codice nostro risponde ai warning del progetto, quello di terzi no:
-# non lo manteniamo noi e non vogliamo toccarlo per farlo tacere.
 CFLAGS    := $(BASE_CFLAGS) -Wall -Wextra -Wpedantic
 TP_CFLAGS := $(BASE_CFLAGS) -w
 
@@ -77,7 +77,7 @@ test: $(TEST_BINS)
 		fi; \
 	done; \
 	echo "==========================================="; \
-	echo "Total suite runned: $$total, fallite: $$failed"; \
+	echo "Total suites run: $$total, failed: $$failed"; \
 	test $$failed -eq 0
 
 .PHONY: run
@@ -90,6 +90,14 @@ clean:
 
 .PHONY: rebuild
 rebuild: clean all
+
+.PHONY: install
+install: $(TARGET)
+	install -Dm755 $(TARGET) $(BINDIR)/$(NAME)
+
+.PHONY: uninstall
+uninstall:
+	$(RM) $(BINDIR)/$(NAME)
 
 $(OBJ_DIR) $(BIN_DIR):
 	@mkdir -p $@
