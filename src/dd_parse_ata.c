@@ -72,6 +72,16 @@ static int ata_attribute_raw(const dd_ata *ata, int id, const char *name_part,
     }
 }
 
+/* The disk's own verdict on an attribute: "now" or "past" if value ever
+   crossed thresh, "" otherwise (also when thresh carries no meaning for
+   that attribute, e.g. thresh 0). Cheaper to trust than to recompute. */
+static const char *ata_attribute_when_failed(const dd_ata *ata, int id,
+                                             const char *name_part){
+    cJSON *attribute = find_ata_attribute(ata, id, name_part);
+    cJSON *when_failed = cJSON_GetObjectItemCaseSensitive(attribute, "when_failed");
+    return cJSON_IsString(when_failed) ? when_failed->valuestring : "";
+}
+
 /* Reads the normalized value of an attribute (percentage of life left, for
    the wear attributes). */
 static int ata_attribute_value(const dd_ata *ata, int id, const char *name_part,
@@ -119,6 +129,8 @@ static int find_device_statistic(const dd_ata *ata, const char *name, double *ou
    Returns 0 when nothing reports them in a unit we can name. */
 static int ata_data_moved(const dd_ata *ata, const char *statistic,
                           int id, double *bytes){
+   
+    /* Statistics is an ACS-3 feature, not all disks (especially older or entry-level HDDs) expose it */
     double sectors;
     if(find_device_statistic(ata, statistic, &sectors)){
         *bytes = sectors * ata->sector_size;
@@ -144,11 +156,21 @@ static int ata_data_moved(const dd_ata *ata, const char *statistic,
     return 1;
 }
 
-/* A counter whose expected value is zero: anything else is worth watching */
+/* A counter whose expected value is zero: anything else is worth watching.
+   when_failed overrides that when the disk's own threshold already flagged
+   it, catching wear the raw count alone would still call harmless. */
 static void add_counter(dd_report *report, const char *key, const char *label,
-                        double count){
+                        double count, const char *when_failed){
+    dd_severity severity;
+    if(strcmp(when_failed, "now") == 0)
+        severity = DD_ALARM;
+    else if(strcmp(when_failed, "past") == 0)
+        severity = DD_WATCH;
+    else
+        severity = count != 0 ? DD_WATCH : DD_OK;
+
     dd_flag(dd_add_number(report, DD_SECTION_WEAR, key, label, DD_COUNT, count),
-            count != 0 ? DD_WATCH : DD_OK);
+            severity);
 }
 
 /* Adds a wear counter read from the attribute table; a missing attribute is
@@ -161,7 +183,28 @@ static void add_ata_counter(dd_report *report, const dd_ata *ata, int id,
     if(!ata_attribute_raw(ata, id, name_part, &count))
         dd_add_absent(report, DD_SECTION_WEAR, key, label);
     else
-        add_counter(report, key, label, count);
+        add_counter(report, key, label, count,
+                   ata_attribute_when_failed(ata, id, name_part));
+}
+
+/* Same as add_ata_counter, but for the pair of ids some vendors use
+   interchangeably for the same counter (id first, alt_id as fallback). */
+static void add_ata_counter2(dd_report *report, const dd_ata *ata,
+                             int id, int alt_id, const char *name_part,
+                             const char *key, const char *label){
+    double count;
+    int matched_id = id;
+
+    if(!ata_attribute_raw(ata, id, name_part, &count)){
+        matched_id = alt_id;
+        if(!ata_attribute_raw(ata, alt_id, name_part, &count)){
+            dd_add_absent(report, DD_SECTION_WEAR, key, label);
+            return;
+        }
+    }
+
+    add_counter(report, key, label, count,
+               ata_attribute_when_failed(ata, matched_id, name_part));
 }
 
 /* How long the disk has worked and how much it has moved. Identical on both
@@ -253,19 +296,11 @@ void build_ata_ssd_report(cJSON *root, dd_report *report){
 
     add_ata_counter(report, &ata, 5, NULL, "reallocated_sectors", "Reallocated sectors");
 
-    double count;
+    add_ata_counter2(report, &ata, 171, 181, "Program_Fail",
+                     "program_failures", "Program failures");
 
-    if(ata_attribute_raw(&ata, 171, "Program_Fail", &count) ||
-       ata_attribute_raw(&ata, 181, "Program_Fail", &count))
-        add_counter(report, "program_failures", "Program failures", count);
-    else
-        dd_add_absent(report, DD_SECTION_WEAR, "program_failures", "Program failures");
-
-    if(ata_attribute_raw(&ata, 172, "Erase_Fail", &count) ||
-       ata_attribute_raw(&ata, 182, "Erase_Fail", &count))
-        add_counter(report, "erase_failures", "Erase failures", count);
-    else
-        dd_add_absent(report, DD_SECTION_WEAR, "erase_failures", "Erase failures");
+    add_ata_counter2(report, &ata, 172, 182, "Erase_Fail",
+                     "erase_failures", "Erase failures");
 
     add_ata_counter(report, &ata, 187, "Reported_Uncorrect",
                     "reported_uncorrect", "Reported uncorrect");

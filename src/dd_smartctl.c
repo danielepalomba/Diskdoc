@@ -6,6 +6,7 @@
 #include "dd_smartctl.h"
 #include "dd_parse.h"
 #include "dd_print.h"
+#include "dd_report.h"
 
 /* smartctl reports its outcome as a bitmask.
 
@@ -118,7 +119,7 @@ static int check_smartctl_status(cJSON *root){
 }
 
 /* Runs smartctl on dev_path, parses its JSON output, and prints the disk report. */
-void analyze_disk(const char *dev_path){
+int analyze_disk(const char *dev_path){
     char command[256];
     int status = 0;
 
@@ -127,7 +128,7 @@ void analyze_disk(const char *dev_path){
     FILE *fp = popen(command, "r");
     if(fp == NULL){
         fprintf(stderr, COLOR_RED "Error while running smartctl on %s\n" COLOR_RESET, dev_path);
-        return;
+        return dd_exit_code(DD_ALARM);
     }
 
     printf(COLOR_YELLOW "Analyzing /dev/%s..." COLOR_RESET "\n", dev_path);
@@ -138,7 +139,7 @@ void analyze_disk(const char *dev_path){
 
     if(data == NULL){
         fprintf(stderr, COLOR_RED "Could not read smartctl output for %s\n" COLOR_RESET, dev_path);
-        return;
+        return dd_exit_code(DD_ALARM);
     }
 
     if(status == -1)
@@ -150,10 +151,17 @@ void analyze_disk(const char *dev_path){
     cJSON *root = cJSON_Parse(data);
     free(data);
 
-    if(root == NULL) return;
+    if(root == NULL) return dd_exit_code(DD_ALARM);
 
-    if(check_smartctl_status(root))
-        print_disk_report(root);
+    int exit_code = dd_exit_code(DD_ALARM);
+
+    if(check_smartctl_status(root)){
+        dd_report report = {0};
+        build_disk_report(root, &report);
+        print_report_text(&report);
+        exit_code = dd_exit_code(dd_report_worst(&report));
+    }
 
     cJSON_Delete(root);
+    return exit_code;
 }

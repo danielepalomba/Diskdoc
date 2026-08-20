@@ -6,7 +6,7 @@
 #define DD_MAX_FIELDS 64
 
 #if defined(__GNUC__)
-#  define DD_PRINTF(fmt_pos, first_arg) \
+# define DD_PRINTF(fmt_pos, first_arg) \
        __attribute__((format(printf, fmt_pos, first_arg)))
 #else
 #  define DD_PRINTF(fmt_pos, first_arg)
@@ -73,6 +73,8 @@ void dd_flag_note(dd_field *field, dd_severity severity,
                   const char *fmt, ...) DD_PRINTF(3, 4);
 
 dd_severity dd_report_worst(const dd_report *report);
+
+int dd_exit_code(dd_severity severity);
 
 const dd_field *dd_find(const dd_report *report, const char *key);
 

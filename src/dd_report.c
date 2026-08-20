@@ -116,6 +116,13 @@ dd_severity dd_report_worst(const dd_report *report){
     return worst;
 }
 
+/* Collapses a severity into a 3-state exit code for cron/monitoring use. */
+int dd_exit_code(dd_severity severity){
+    if(severity >= DD_ALARM) return 2;
+    if(severity >= DD_WATCH) return 1;
+    return 0;
+}
+
 /* Looks up a field by key, NULL if none matches (notes carry no key). */
 const dd_field *dd_find(const dd_report *report, const char *key){
     for(size_t i = 0; i < report->count; i++){

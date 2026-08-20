@@ -4,7 +4,6 @@
 #include "dd_parse.h"
 #include "dd_parse_nvme.h"
 #include "dd_parse_ata.h"
-#include "dd_print.h"
 #include "dd_report.h"
 
 /* Adds the fields every disk reports regardless of protocol; fields the
@@ -56,28 +55,25 @@ static void build_common_report(cJSON *root, dd_report *report){
                     "SMART is supported but disabled, these values may be out of date");
 }
 
-/* Builds and prints the full report for a smartctl JSON output, dispatching
-   to the NVMe or ATA builder based on the device protocol. */
-void print_disk_report(cJSON *root){
-    dd_report report = {0};
-
-    build_common_report(root, &report);
+/* Builds the full report for a smartctl JSON output into report, dispatching
+   to the NVMe or ATA builder based on the device protocol. Does not print:
+   the caller decides what to do with the finished report. */
+void build_disk_report(cJSON *root, dd_report *report){
+    build_common_report(root, report);
 
     cJSON *device = cJSON_GetObjectItemCaseSensitive(root, "device");
     cJSON *protocol = cJSON_GetObjectItemCaseSensitive(device, "protocol");
 
     if(cJSON_IsString(protocol)){
         if(strcmp(protocol->valuestring, "NVMe") == 0){
-            build_nvme_report(root, &report);
+            build_nvme_report(root, report);
         }else if(strcmp(protocol->valuestring, "ATA") == 0){
             cJSON *rotation = cJSON_GetObjectItemCaseSensitive(root, "rotation_rate");
 
             if((cJSON_IsNumber(rotation) && rotation->valueint == 0) || rotation == NULL)
-                build_ata_ssd_report(root, &report);
+                build_ata_ssd_report(root, report);
             else
-                build_ata_hdd_report(root, &report);
+                build_ata_hdd_report(root, report);
         }
     }
-
-    print_report_text(&report);
 }
