@@ -123,6 +123,14 @@ int dd_exit_code(dd_severity severity){
     return 0;
 }
 
+/* Convert an exit_code to a severity */
+dd_severity dd_exit_code_to_severity(int exit_code){
+    if(exit_code == -1) return DD_GOOD;
+    if(exit_code == 1 || exit_code == 2) return DD_WATCH;
+    if(exit_code == 3) return DD_ALARM;
+    return DD_OK;
+}
+
 /* Looks up a field by key, NULL if none matches (notes carry no key). */
 const dd_field *dd_find(const dd_report *report, const char *key){
     for(size_t i = 0; i < report->count; i++){

@@ -15,5 +15,7 @@
 
 void print_section(const char *title);
 void print_report_text(const dd_report *report);
+const char *severity_to_str(dd_severity severity);
+const char *severity_color(dd_severity severity);
 
 #endif

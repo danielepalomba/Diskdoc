@@ -76,6 +76,8 @@ dd_severity dd_report_worst(const dd_report *report);
 
 int dd_exit_code(dd_severity severity);
 
+dd_severity dd_exit_code_to_severity(int exit_code);
+
 const dd_field *dd_find(const dd_report *report, const char *key);
 
 #endif

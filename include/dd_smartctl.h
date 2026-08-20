@@ -1,6 +1,8 @@
 #ifndef DD_SMARTCTL_H
 #define DD_SMARTCTL_H
 
-int analyze_disk(const char *dev_path);
+#include <stdbool.h>
+
+int analyze_disk(const char *dev_path, bool print_report);
 
 #endif

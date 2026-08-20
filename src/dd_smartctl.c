@@ -119,7 +119,7 @@ static int check_smartctl_status(cJSON *root){
 }
 
 /* Runs smartctl on dev_path, parses its JSON output, and prints the disk report. */
-int analyze_disk(const char *dev_path){
+int analyze_disk(const char *dev_path, bool print_report){
     char command[256];
     int status = 0;
 
@@ -158,7 +158,7 @@ int analyze_disk(const char *dev_path){
     if(check_smartctl_status(root)){
         dd_report report = {0};
         build_disk_report(root, &report);
-        print_report_text(&report);
+        if(print_report) print_report_text(&report);
         exit_code = dd_exit_code(dd_report_worst(&report));
     }
 

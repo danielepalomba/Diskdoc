@@ -33,13 +33,29 @@ static const char *section_title(dd_section section){
 }
 
 /* The colour says how worrying the value is, never which field it belongs to */
-static const char *severity_color(dd_severity severity){
+const char *severity_color(dd_severity severity){
     switch(severity){
         case DD_GOOD:   return COLOR_GREEN;
         case DD_OK:     return "";
         case DD_ABSENT: return COLOR_DIM;
         case DD_WATCH:  return COLOR_YELLOW;
         case DD_ALARM:  return COLOR_RED;
+    }
+    return "";
+}
+
+/* Maps a severity to the label shown next to a disk in summary output. */
+const char *severity_to_str(dd_severity severity){
+    switch(severity){
+        case DD_GOOD:
+            return "GOOD";
+        case DD_OK:
+            return "OK";
+        case DD_ABSENT:
+        case DD_WATCH:
+            return "WARNING";
+        case DD_ALARM:
+            return "ALARM";
     }
     return "";
 }
