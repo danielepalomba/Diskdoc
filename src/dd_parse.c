@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdbool.h>
 
 #include "cJSON.h"
 #include "dd_parse.h"
@@ -55,6 +56,23 @@ static void build_common_report(cJSON *root, dd_report *report){
                     "SMART is supported but disabled, these values may be out of date");
 }
 
+/* Checks whether an attribute exists with the id passed as a parameter. */
+static bool is_present_attribute(cJSON *root, int attribute_id){
+    cJSON *attributes = cJSON_GetObjectItemCaseSensitive(root, "ata_smart_attributes");
+    if(attributes == NULL) return false;
+
+    cJSON *table = cJSON_GetObjectItemCaseSensitive(attributes, "table");
+    if(table == NULL) return false;
+
+    cJSON *attribute;
+    cJSON_ArrayForEach(attribute, table){
+        cJSON *attr_id = cJSON_GetObjectItemCaseSensitive(attribute, "id");
+        if(attr_id != NULL && cJSON_IsNumber(attr_id) && (int)cJSON_GetNumberValue(attr_id) == attribute_id)
+            return true;
+    }
+    return false;
+}
+
 /* Builds the full report for a smartctl JSON output into report, dispatching
    to the NVMe or ATA builder based on the device protocol. Does not print:
    the caller decides what to do with the finished report. */
@@ -69,8 +87,14 @@ void build_disk_report(cJSON *root, dd_report *report){
             build_nvme_report(root, report);
         }else if(strcmp(protocol->valuestring, "ATA") == 0){
             cJSON *rotation = cJSON_GetObjectItemCaseSensitive(root, "rotation_rate");
+            bool no_rotation = rotation == NULL || (cJSON_IsNumber(rotation) && rotation->valueint == 0);
 
-            if((cJSON_IsNumber(rotation) && rotation->valueint == 0) || rotation == NULL)
+            /* To make the distinction between HDD and SSD more solid,
+               we look for typical SSD attributes, in addition to analyzing the rotation_rate */
+            if(no_rotation && (is_present_attribute(root, 231)
+                        || is_present_attribute(root, 233)
+                        || is_present_attribute(root, 202)
+                        || is_present_attribute(root, 177)))
                 build_ata_ssd_report(root, report);
             else
                 build_ata_hdd_report(root, report);

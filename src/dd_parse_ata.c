@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #include "cJSON.h"
 #include "dd_parse_ata.h"
