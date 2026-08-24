@@ -94,10 +94,11 @@ void build_disk_report(cJSON *root, dd_report *report){
             if(no_rotation && (is_present_attribute(root, 231)
                         || is_present_attribute(root, 233)
                         || is_present_attribute(root, 202)
-                        || is_present_attribute(root, 177)))
-                build_ata_ssd_report(root, report);
-            else
-                build_ata_hdd_report(root, report);
+                        || is_present_attribute(root, 177))){
+                build_ata_ssd_report(root, report);   
+            }else{
+                build_ata_hdd_report(root, report);        
+            }
         }
     }
 }

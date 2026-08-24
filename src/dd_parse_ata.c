@@ -208,6 +208,18 @@ static void add_ata_counter2(dd_report *report, const dd_ata *ata,
                ata_attribute_when_failed(ata, matched_id, name_part));
 }
 
+static void add_ata_self_test(cJSON *root, dd_report *report){
+    cJSON *ata_smart_data = cJSON_GetObjectItemCaseSensitive(root, "ata_smart_data");
+    cJSON *self_test = cJSON_GetObjectItemCaseSensitive(ata_smart_data, "self_test");
+    cJSON *test_status = cJSON_GetObjectItemCaseSensitive(self_test, "status");
+    cJSON *passed = cJSON_GetObjectItemCaseSensitive(test_status, "passed");
+
+    if(test_status != NULL)
+        dd_flag(dd_add_text(report, DD_SECTION_WEAR, "self_test", "Self test",
+                            "%s", cJSON_IsTrue(passed) ? "passed" : "not passed"),
+                cJSON_IsTrue(passed) ? DD_GOOD : DD_ALARM);
+}
+
 /* How long the disk has worked and how much it has moved. Identical on both
    families, so both builders end with this. */
 static void add_ata_usage(dd_report *report, const dd_ata *ata){
@@ -281,17 +293,9 @@ static void add_ata_life_left(dd_report *report, const dd_ata *ata){
 
 /* Builds the wear and usage report for an ATA SSD. */
 void build_ata_ssd_report(cJSON *root, dd_report *report){
-    dd_ata ata = ata_context(root);
-
-    cJSON *ata_smart_data = cJSON_GetObjectItemCaseSensitive(root, "ata_smart_data");
-    cJSON *self_test = cJSON_GetObjectItemCaseSensitive(ata_smart_data, "self_test");
-    cJSON *test_status = cJSON_GetObjectItemCaseSensitive(self_test, "status");
-    cJSON *passed = cJSON_GetObjectItemCaseSensitive(test_status, "passed");
-
-    if(test_status != NULL)
-        dd_flag(dd_add_text(report, DD_SECTION_WEAR, "self_test", "Self test",
-                            "%s", cJSON_IsTrue(passed) ? "passed" : "not passed"),
-                cJSON_IsTrue(passed) ? DD_GOOD : DD_ALARM);
+    dd_ata ata = ata_context(root); 
+    
+    add_ata_self_test(root, report);
 
     add_ata_life_left(report, &ata);
 
@@ -325,7 +329,9 @@ void build_ata_hdd_report(cJSON *root, dd_report *report){
     };
 
     dd_ata ata = ata_context(root);
-
+    
+    add_ata_self_test(root, report);
+        
     for(size_t i = 0; i < sizeof counters / sizeof counters[0]; i++)
         add_ata_counter(report, &ata, counters[i].id, NULL,
                         counters[i].key, counters[i].label);

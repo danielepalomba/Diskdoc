@@ -1,5 +1,7 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/wait.h>
 
 #include "cJSON.h"
@@ -19,6 +21,30 @@
 #define DD_SMARTCTL_PARTIAL  0x04
 #define DD_SMARTCTL_FINDINGS 0xF8
 #define DD_SMARTCTL_OPEN_FAILED 0x02
+
+/* SMART/health/self-test data on NVMe live on the controller, not the
+   namespace: smartctl on /dev/nvme0n1 can fail to read logs */
+static int nvme_controller_name(const char *dev_path, char *out, size_t out_size){
+    if(strncmp(dev_path, "nvme", 4) != 0 || !isdigit((unsigned char)dev_path[4]))
+        return 0;
+
+    const char *p = dev_path + 4;
+    while(isdigit((unsigned char)*p)) p++;
+
+    const char *ns = p;
+    if(*ns != 'n' || !isdigit((unsigned char)ns[1])) return 0;
+
+    p = ns + 1;
+    while(isdigit((unsigned char)*p)) p++;
+    if(*p != '\0') return 0;
+
+    size_t ctrl_len = (size_t)(ns - dev_path);
+    if(ctrl_len >= out_size) return 0;
+
+    memcpy(out, dev_path, ctrl_len);
+    out[ctrl_len] = '\0';
+    return 1;
+}
 
 /* Reads a whole pipe into a buffer that grows as needed.
    Returns a string the caller has to free, or NULL on error. */
@@ -121,9 +147,13 @@ static int check_smartctl_status(cJSON *root){
 /* Runs smartctl on dev_path, parses its JSON output, and prints the disk report. */
 int analyze_disk(const char *dev_path, bool print_report){
     char command[256];
+    char target[32];
     int status = 0;
 
-    snprintf(command, sizeof(command), "smartctl -x -j /dev/%s 2>/dev/null", dev_path);
+    if(!nvme_controller_name(dev_path, target, sizeof target))
+        snprintf(target, sizeof target, "%s", dev_path);
+
+    snprintf(command, sizeof(command), "smartctl -x -j /dev/%s 2>/dev/null", target);
 
     FILE *fp = popen(command, "r");
     if(fp == NULL){

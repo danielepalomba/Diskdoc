@@ -7,6 +7,8 @@
 /* NVMe data unit is 1000 sectors of 512 bytes */
 #define DD_NVME_DATA_UNIT 512000.0
 
+#define DD_NVME_SELF_TEST_HISTORY 5
+
 /* Decodes the NVMe critical warning bitmask: one field for the mask itself,
    then a note for every alarm the disk raised. */
 static void add_critical_warning(dd_report *report, unsigned warning){
@@ -35,6 +37,82 @@ static void add_critical_warning(dd_report *report, unsigned warning){
     if(warning & 0xC0)
         dd_add_note(report, DD_SECTION_WEAR, DD_ALARM,
                     "- unknown flag set by the device");
+}
+
+/* Maps nvme_self_test_log.table[].self_test_result.value to a severity. 0 is a
+   clean pass; 1-4, 8 and 9 mean the test was aborted rather than failed,
+   5-7 are the disk itself reporting a fatal error or a failed segment. */
+static dd_severity nvme_self_test_severity(int result_value){
+    switch(result_value){
+        case 0:
+            return DD_GOOD;
+        case 1: case 2: case 3: case 4: case 8: case 9:
+            return DD_WATCH;
+        case 5: case 6: case 7:
+            return DD_ALARM;
+        default:
+            return DD_WATCH;
+    }
+}
+
+/* Adds the outcome of the last NVMe self-test, or that one is currently
+   running, plus a short history of the most recent runs. */
+static void add_nvme_self_test(cJSON *root, dd_report *report){
+    cJSON *log = cJSON_GetObjectItemCaseSensitive(root, "nvme_self_test_log");
+
+    cJSON *current_op = cJSON_GetObjectItemCaseSensitive(log, "current_self_test_operation");
+    cJSON *current_op_value = cJSON_GetObjectItemCaseSensitive(current_op, "value");
+
+    if(cJSON_IsNumber(current_op_value) && cJSON_GetNumberValue(current_op_value) != 0){
+        cJSON *current_op_string = cJSON_GetObjectItemCaseSensitive(current_op, "string");
+
+        dd_flag(dd_add_text(report, DD_SECTION_WEAR, "self_test", "Self test", "%s",
+                            cJSON_IsString(current_op_string) ?
+                            current_op_string->valuestring : "in progress"),
+                DD_WATCH);
+    }
+
+    cJSON *table = cJSON_GetObjectItemCaseSensitive(log, "table");
+    if(!cJSON_IsArray(table) || cJSON_GetArraySize(table) == 0){
+        /* Device self-test is an optional NVMe feature. The lack
+          of logs is not cause for alarm. */
+        dd_add_note(report, DD_SECTION_WEAR, DD_OK,
+                   "*no self-test history reported by the device");
+        return;
+    }
+
+    int shown = 0;
+    cJSON *entry;
+    cJSON_ArrayForEach(entry, table){
+        if(shown == DD_NVME_SELF_TEST_HISTORY) break;
+
+        cJSON *result = cJSON_GetObjectItemCaseSensitive(entry, "self_test_result");
+        cJSON *result_value = cJSON_GetObjectItemCaseSensitive(result, "value");
+        cJSON *result_string = cJSON_GetObjectItemCaseSensitive(result, "string");
+        if(!cJSON_IsNumber(result_value) || !cJSON_IsString(result_string)) continue;
+
+        cJSON *code = cJSON_GetObjectItemCaseSensitive(entry, "self_test_code");
+        cJSON *code_string = cJSON_GetObjectItemCaseSensitive(code, "string");
+        cJSON *hours = cJSON_GetObjectItemCaseSensitive(entry, "power_on_hours");
+
+        dd_severity severity = nvme_self_test_severity((int)cJSON_GetNumberValue(result_value));
+
+        if(shown == 0 && !(cJSON_IsNumber(current_op_value) && cJSON_GetNumberValue(current_op_value) != 0))
+            dd_flag(dd_add_text(report, DD_SECTION_WEAR, "self_test", "Self test",
+                                "%s", result_string->valuestring),
+                    severity);
+
+        if(cJSON_IsNumber(hours))
+            dd_add_note(report, DD_SECTION_WEAR, severity, "- %s: %s (at %.0f h)",
+                       cJSON_IsString(code_string) ? code_string->valuestring : "self-test",
+                       result_string->valuestring, cJSON_GetNumberValue(hours));
+        else
+            dd_add_note(report, DD_SECTION_WEAR, severity, "- %s: %s",
+                       cJSON_IsString(code_string) ? code_string->valuestring : "self-test",
+                       result_string->valuestring);
+
+        shown++;
+    }
 }
 
 /* Builds the wear and usage report from the NVMe SMART health log. */
@@ -80,6 +158,8 @@ void build_nvme_report(cJSON *root, dd_report *report){
     if(cJSON_IsNumber(num_err_log))
         dd_add_number(report, DD_SECTION_WEAR, "error_log_entries",
                       "Error log entries", DD_COUNT, cJSON_GetNumberValue(num_err_log));
+
+    add_nvme_self_test(root, report);
 
     cJSON *p_on_hours = cJSON_GetObjectItemCaseSensitive(log, "power_on_hours");
     if(cJSON_IsNumber(p_on_hours))
