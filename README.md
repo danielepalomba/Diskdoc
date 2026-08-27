@@ -45,6 +45,7 @@ sudo make uninstall
 
 ```
 Usage: diskdoc [-h] [-a] [-q] [-d <device>]
+       diskdoc -t <short|long> <device>
 
   -h, --help            show this help message and exit
   -a, --all             analyze every detected physical disk
