@@ -72,6 +72,7 @@ static int cmd_analyze_device(char *dev, bool print){
     dd_disk_list disks;
 
     if(name == NULL){
+        clean_screen();
         puts(COLOR_YELLOW "Scanning physical disks..." COLOR_RESET);
 
         if(scan_physical_disks(&disks) != 0) return dd_exit_code(DD_ALARM);
@@ -169,7 +170,6 @@ int main(int argc, char **argv){
         return cmd_self_test(argv[optind], test_mode);
     }
 
-    clean_screen();
     if(a_flag) return cmd_analyze_all(print);
     return cmd_analyze_device(device_name, print);
 }
