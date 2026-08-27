@@ -50,8 +50,10 @@ Usage: diskdoc [-h] [-a] [-q] [-d <device>]
   -a, --all             analyze every detected physical disk
   -q, --quiet           only print the summary line per disk, skip the detailed report
   -d, --device <name>   analyze a single device by kernel name (e.g. sda)
+  -t, --test <mode>     start a short or long self-test on <device> (e.g. -t short nvme0)
 
 With no options, diskdoc scans the disks and lets you pick one interactively.
+-t cannot be combined with any other option.
 ```
 
 Since reading SMART data usually requires root, run diskdoc with `sudo`.

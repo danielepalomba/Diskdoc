@@ -83,6 +83,76 @@ static char* read_smartctl_output(FILE *fp){
     return buffer;
 }
 
+/* Runs `smartctl <args> /dev/<target>` on dev_path and parses its JSON
+   output. Returns the parsed root, or NULL. The caller owns the result and must cJSON_Delete it. */
+static cJSON* run_smartctl_json(const char *dev_path, const char *args){
+    char command[256];
+    char target[32];
+    int status = 0;
+
+    if(!nvme_controller_name(dev_path, target, sizeof target))
+        snprintf(target, sizeof target, "%s", dev_path);
+
+    snprintf(command, sizeof(command), "smartctl %s /dev/%s 2>/dev/null", args, target);
+
+    FILE *fp = popen(command, "r");
+    if(fp == NULL){
+        fprintf(stderr, COLOR_RED "Error while running smartctl on %s\n" COLOR_RESET, dev_path);
+        return NULL;
+    }
+
+    char *data = read_smartctl_output(fp);
+
+    status = pclose(fp);
+
+    if(data == NULL){
+        fprintf(stderr, COLOR_RED "Could not read smartctl output for %s\n" COLOR_RESET, dev_path);
+        return NULL;
+    }
+
+    if(status == -1)
+        perror("pclose");
+    else if(WIFSIGNALED(status))
+        fprintf(stderr, COLOR_RED "smartctl was killed by signal %d\n" COLOR_RESET,
+                WTERMSIG(status));
+
+    cJSON *root = cJSON_Parse(data);
+    free(data);
+
+    return root;
+}
+
+/* Runs `smartctl <args> /dev/<target>` on dev_path and returns its raw
+   stdout+stderr as a string the caller must free, or NULL on error. 
+   *proc_status receives the status as returned by pclose(), for the 
+   caller to inspect with WIFEXITED etc. */
+static char* run_smartctl_text(const char *dev_path, const char *args, int *proc_status){
+    char command[256];
+    char target[32];
+
+    if(!nvme_controller_name(dev_path, target, sizeof target))
+        snprintf(target, sizeof target, "%s", dev_path);
+
+    snprintf(command, sizeof(command), "smartctl %s /dev/%s 2>&1", args, target);
+
+    FILE *fp = popen(command, "r");
+    if(fp == NULL){
+        fprintf(stderr, COLOR_RED "Error while running smartctl on %s\n" COLOR_RESET, dev_path);
+        return NULL;
+    }
+
+    char *data = read_smartctl_output(fp);
+
+    *proc_status = pclose(fp);
+
+    if(data == NULL){
+        fprintf(stderr, COLOR_RED "Could not read smartctl output for %s\n" COLOR_RESET, dev_path);
+        return NULL;
+    }
+
+    return data;
+}
+
 /* Prints the messages smartctl attached to its report, in the given color */
 static void print_smartctl_messages(cJSON *smartctl, FILE *stream, const char *color){
     cJSON *messages = cJSON_GetObjectItemCaseSensitive(smartctl, "messages");
@@ -146,41 +216,9 @@ static int check_smartctl_status(cJSON *root){
 
 /* Runs smartctl on dev_path, parses its JSON output, and prints the disk report. */
 int analyze_disk(const char *dev_path, bool print_report){
-    char command[256];
-    char target[32];
-    int status = 0;
-
-    if(!nvme_controller_name(dev_path, target, sizeof target))
-        snprintf(target, sizeof target, "%s", dev_path);
-
-    snprintf(command, sizeof(command), "smartctl -x -j /dev/%s 2>/dev/null", target);
-
-    FILE *fp = popen(command, "r");
-    if(fp == NULL){
-        fprintf(stderr, COLOR_RED "Error while running smartctl on %s\n" COLOR_RESET, dev_path);
-        return dd_exit_code(DD_ALARM);
-    }
-
     printf(COLOR_YELLOW "Analyzing /dev/%s..." COLOR_RESET "\n", dev_path);
 
-    char *data = read_smartctl_output(fp);
-
-    status = pclose(fp);
-
-    if(data == NULL){
-        fprintf(stderr, COLOR_RED "Could not read smartctl output for %s\n" COLOR_RESET, dev_path);
-        return dd_exit_code(DD_ALARM);
-    }
-
-    if(status == -1)
-        perror("pclose");
-    else if(WIFSIGNALED(status))
-        fprintf(stderr, COLOR_RED "smartctl was killed by signal %d\n" COLOR_RESET,
-                WTERMSIG(status));
- 
-    cJSON *root = cJSON_Parse(data);
-    free(data);
-
+    cJSON *root = run_smartctl_json(dev_path, "-x -j");
     if(root == NULL) return dd_exit_code(DD_ALARM);
 
     int exit_code = dd_exit_code(DD_ALARM);
@@ -193,5 +231,46 @@ int analyze_disk(const char *dev_path, bool print_report){
     }
 
     cJSON_Delete(root);
+    return exit_code;
+}
+
+/* Run a self-test on dev/<target>, checking for any command-related errors. */ 
+int start_self_test(const char *dev_path, const char *mode){
+    char args[32];
+    snprintf(args, sizeof args, "-t %s", mode);
+
+    int status = 0;
+    char *output = run_smartctl_text(dev_path, args, &status);
+    if(output == NULL) return dd_exit_code(DD_ALARM);
+
+    int exit_code = dd_exit_code(DD_ALARM);
+
+    if(status == -1){
+        perror("pclose");
+    }else if(WIFSIGNALED(status)){
+        fprintf(stderr, COLOR_RED "smartctl was killed by signal %d\n" COLOR_RESET,
+                WTERMSIG(status));
+    }else if(WIFEXITED(status)){
+        unsigned code = (unsigned)WEXITSTATUS(status);
+
+        if(code & DD_SMARTCTL_FAILED){
+            fprintf(stderr, COLOR_RED "smartctl could not start the self-test on %s (0x%02x):\n%s"
+                    COLOR_RESET, dev_path, code, output);
+            if(code & DD_SMARTCTL_OPEN_FAILED)
+                fprintf(stderr, COLOR_YELLOW
+                        "Reading SMART data usually requires root, try again with sudo.\n"
+                        COLOR_RESET);
+        }else if(strstr(output, "not supported") != NULL){
+            fprintf(stderr, COLOR_RED "This device does not support self-tests.\n" COLOR_RESET);
+        }else if(strstr(output, "Self-test has begun") != NULL){
+            exit_code = dd_exit_code(DD_OK);
+        }else{
+            fprintf(stderr, COLOR_YELLOW
+                    "Unexpected smartctl output, self-test status unknown:\n%s" COLOR_RESET,
+                    output);
+        }
+    }
+
+    free(output);
     return exit_code;
 }
