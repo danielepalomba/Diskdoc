@@ -234,6 +234,14 @@ int analyze_disk(const char *dev_path, bool print_report){
     return exit_code;
 }
 
+cJSON *analyze_disk_raw(const char *dev_path){
+    printf(COLOR_YELLOW "Analyzing /dev/%s..." COLOR_RESET "\n", dev_path);
+
+    cJSON *root = run_smartctl_json(dev_path, "-a -j");
+    if(root == NULL) return NULL; 
+    return root;
+}
+
 /* Run a self-test on dev/<target>, checking for any command-related errors. */ 
 int start_self_test(const char *dev_path, const char *mode){
     char args[32];

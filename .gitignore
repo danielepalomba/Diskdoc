@@ -11,6 +11,7 @@ other/
 *.la
 *.gch
 *.pch
+*.env
 
 /diskdoc
 /tests/test_*

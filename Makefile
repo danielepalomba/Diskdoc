@@ -15,7 +15,7 @@ CC       := gcc
 TP_INCS  := $(addprefix -I,$(wildcard $(TP_DIR)/*))
 CPPFLAGS := -I$(INC_DIR) $(TP_INCS) -MMD -MP -D_POSIX_C_SOURCE=200809L
 LDFLAGS  :=
-LDLIBS   :=
+LDLIBS   := -lcurl
 
 BASE_CFLAGS := -std=c11
 

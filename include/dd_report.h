@@ -78,6 +78,11 @@ int dd_exit_code(dd_severity severity);
 
 dd_severity dd_exit_code_to_severity(int exit_code);
 
+/* diskdoc could not do its job at all (bad arguments, missing API key,
+   allocation failure, ...). Kept out of the 0/1/2 severity scale so scripts
+   can tell "the disk is fine/watch/alarm" from "diskdoc itself failed". */
+#define DD_EXIT_ERROR 3
+
 const dd_field *dd_find(const dd_report *report, const char *key);
 
 #endif

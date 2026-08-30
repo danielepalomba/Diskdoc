@@ -123,11 +123,10 @@ int dd_exit_code(dd_severity severity){
     return 0;
 }
 
-/* Convert an exit_code to a severity */
+/* Convert an exit_code produced by dd_exit_code back into a severity. */
 dd_severity dd_exit_code_to_severity(int exit_code){
-    if(exit_code == -1) return DD_GOOD;
-    if(exit_code == 1 || exit_code == 2) return DD_WATCH;
-    if(exit_code == 3) return DD_ALARM;
+    if(exit_code == 2) return DD_ALARM;
+    if(exit_code == 1) return DD_WATCH;
     return DD_OK;
 }
 
