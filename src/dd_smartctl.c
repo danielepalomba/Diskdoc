@@ -1,8 +1,11 @@
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <errno.h>
+#include <unistd.h>
 
 #include "cJSON.h"
 #include "dd_smartctl.h"
@@ -83,31 +86,122 @@ static char* read_smartctl_output(FILE *fp){
     return buffer;
 }
 
+/* Rereads the temporary file from the beginning and returns its contents.
+   Returns a malloc'd string (possibly ""), or NULL on error. */
+static char *get_smartctl_errors(int fd)
+{
+    if(fd < 0)
+        return NULL;
+
+    if(lseek(fd, 0, SEEK_SET) == (off_t)-1)
+        return NULL;
+
+    size_t cap = 1024, len = 0;
+    char *buf = malloc(cap);
+    if(!buf)
+        return NULL;
+
+    for(;;){
+        if(len + 1 >= cap){
+            char *tmp = realloc(buf, cap * 2);
+            if(!tmp){ free(buf); return NULL; }
+            buf = tmp;
+            cap *= 2;
+        }
+        ssize_t n = read(fd, buf + len, cap - len - 1);
+        if(n < 0){
+            if(errno == EINTR) continue;
+            free(buf);
+            return NULL;
+        }
+        if(n == 0) break;
+        len += (size_t)n;
+    }
+
+    while(len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
+        len--;                 
+    buf[len] = '\0';
+
+    return buf;
+}
+
+/* Opens the scratch file smartctl's stderr is redirected to. It is unlinked
+   right away, so it lives only as long as the descriptor and leaves nothing
+   behind. TMPDIR comes first, then the usual spots: /tmp can be a full tmpfs
+   or mounted read-only, and losing the diagnosis there is the whole point of
+   capturing it. Returns the fd, or -1 when no directory would take the file. */
+static int open_stderr_capture(void){
+    const char *dirs[3];
+    size_t count = 0;
+ 
+    const char *tmpdir = getenv("TMPDIR");
+    if(tmpdir != NULL && tmpdir[0] == '/')
+        dirs[count++] = tmpdir;
+
+    dirs[count++] = "/tmp";
+    dirs[count++] = "/var/tmp";
+
+    for(size_t i = 0; i < count; i++){
+        char tmpl[PATH_MAX];
+
+        int len = snprintf(tmpl, sizeof tmpl, "%s/diskdoc-err-XXXXXX", dirs[i]);
+        if(len < 0 || (size_t)len >= sizeof tmpl) continue;
+
+        int fd = mkstemp(tmpl);
+        if(fd >= 0){
+            unlink(tmpl);
+            return fd;
+        }
+    }
+
+    return -1;
+}
+
 /* Runs `smartctl <args> /dev/<target>` on dev_path and parses its JSON
    output. Returns the parsed root, or NULL. The caller owns the result and must cJSON_Delete it. */
-static cJSON* run_smartctl_json(const char *dev_path, const char *args){
+static cJSON* run_smartctl_json(const char *dev_path, const char *args, char **err_out)
+{
     char command[256];
     char target[32];
     int status = 0;
+    int efd = -1, saved = -1;
+
+    if(err_out)
+        *err_out = NULL;
 
     if(!nvme_controller_name(dev_path, target, sizeof target))
         snprintf(target, sizeof target, "%s", dev_path);
 
-    snprintf(command, sizeof(command), "smartctl %s /dev/%s 2>/dev/null", args, target);
+    if(err_out)
+        efd = open_stderr_capture();
+
+    snprintf(command, sizeof(command), "smartctl %s /dev/%s", args, target);
+
+    if(efd >= 0){
+        saved = dup(STDERR_FILENO);
+        if(saved >= 0)
+            dup2(efd, STDERR_FILENO);
+    }
 
     FILE *fp = popen(command, "r");
+
+    if(saved >= 0){                         
+        dup2(saved, STDERR_FILENO);
+        close(saved);
+    }
+
     if(fp == NULL){
+        if(efd >= 0) close(efd);
         fprintf(stderr, COLOR_RED "Error while running smartctl on %s\n" COLOR_RESET, dev_path);
         return NULL;
     }
 
     char *data = read_smartctl_output(fp);
-
     status = pclose(fp);
 
-    if(data == NULL){
-        fprintf(stderr, COLOR_RED "Could not read smartctl output for %s\n" COLOR_RESET, dev_path);
-        return NULL;
+    if(efd >= 0){
+        *err_out = get_smartctl_errors(efd);
+        close(efd);
     }
 
     if(status == -1)
@@ -116,8 +210,17 @@ static cJSON* run_smartctl_json(const char *dev_path, const char *args){
         fprintf(stderr, COLOR_RED "smartctl was killed by signal %d\n" COLOR_RESET,
                 WTERMSIG(status));
 
+    if(data == NULL){
+        fprintf(stderr, COLOR_RED "Could not read smartctl output for %s\n" COLOR_RESET, dev_path);
+        return NULL;
+    }
+
     cJSON *root = cJSON_Parse(data);
     free(data);
+    if(!root){
+        fprintf(stderr, COLOR_RED "Failed to parse smartctl output for %s\n" COLOR_RESET, dev_path);
+        return NULL;
+    }
 
     return root;
 }
@@ -164,6 +267,17 @@ static void print_smartctl_messages(cJSON *smartctl, FILE *stream, const char *c
         if(cJSON_IsString(string))
             fprintf(stream, "%s  %s\n" COLOR_RESET, color, string->valuestring);
     }
+}
+
+/* Prints what smartctl left on stderr, then frees it. */
+static void print_smartctl_errors(const char *dev_path, char *err){
+    if(err == NULL)
+        fprintf(stderr, COLOR_YELLOW
+                "  (smartctl's error output could not be captured)\n" COLOR_RESET);
+    else if(err[0] != '\0')
+        fprintf(stderr, COLOR_RED "smartctl reported on %s:\n%s\n" COLOR_RESET, dev_path, err);
+
+    free(err);
 }
 
 /* Decodes the smartctl exit bitmask and prints what it reported: fatal
@@ -217,9 +331,15 @@ static int check_smartctl_status(cJSON *root){
 /* Runs smartctl on dev_path, parses its JSON output, and prints the disk report. */
 int analyze_disk(const char *dev_path, bool print_report){
     printf(COLOR_YELLOW "Analyzing /dev/%s..." COLOR_RESET "\n", dev_path);
-
-    cJSON *root = run_smartctl_json(dev_path, "-x -j");
-    if(root == NULL) return dd_exit_code(DD_ALARM);
+    
+    char *err = NULL;
+    cJSON *root = run_smartctl_json(dev_path, "-x -j", &err);
+    if(root == NULL){
+        print_smartctl_errors(dev_path, err);
+        return dd_exit_code(DD_ALARM);
+    }
+ 
+    free(err);
 
     int exit_code = dd_exit_code(DD_ALARM);
 
@@ -237,8 +357,14 @@ int analyze_disk(const char *dev_path, bool print_report){
 cJSON *analyze_disk_raw(const char *dev_path){
     printf(COLOR_YELLOW "Analyzing /dev/%s..." COLOR_RESET "\n", dev_path);
 
-    cJSON *root = run_smartctl_json(dev_path, "-a -j");
-    if(root == NULL) return NULL; 
+    char *err = NULL;
+    cJSON *root = run_smartctl_json(dev_path, "-a -j", &err);
+    if(root == NULL){
+        print_smartctl_errors(dev_path, err);
+        return NULL;
+    }
+
+    free(err);
     return root;
 }
 
