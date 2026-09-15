@@ -35,8 +35,8 @@ int scan_physical_disks(dd_disk_list *list){
         if(strlen(entry->d_name) >= DD_NAME_LEN) continue; //name we cannot store
 
         if(list->count == DD_MAX_DISKS){
-            fprintf(stderr, COLOR_RED "More than %d disks, ignoring the rest\n" COLOR_RESET,
-                    DD_MAX_DISKS);
+            fprintf(stderr, "%sMore than %d disks, ignoring the rest%s\n",
+                    dd_color(stderr, DD_C_RED), DD_MAX_DISKS, dd_color(stderr, DD_C_RESET));
             break;
         }
 
@@ -51,12 +51,13 @@ int scan_physical_disks(dd_disk_list *list){
 /* Prints the scanned disks, numbered so the user can pick one */
 void print_disk_list(const dd_disk_list *list){
     if(list->count == 0){
-        puts(COLOR_RED "No physical disk found." COLOR_RESET);
+        printf("%sNo physical disk found.%s\n", dd_color(stdout, DD_C_RED), dd_color(stdout, DD_C_RESET));
         return;
     }
 
     for(size_t i = 0; i < list->count; i++)
-        printf(COLOR_GREEN "[%zu]Device:" COLOR_RESET " /dev/%s\n", i, list->disks[i].name);
+        printf("%s[%zu]Device:%s /dev/%s\n",
+               dd_color(stdout, DD_C_GREEN), i, dd_color(stdout, DD_C_RESET), list->disks[i].name);
 }
 
 /* Asks which disk to analyze until the answer is a valid index.
@@ -88,14 +89,14 @@ int prompt_disk_choice(const dd_disk_list *list){
         long choice = strtol(line, &end, 10);
 
         if(end == line){
-            puts(COLOR_RED "Invalid choice, try again." COLOR_RESET);
+            printf("%sInvalid choice, try again.%s\n", dd_color(stdout, DD_C_RED), dd_color(stdout, DD_C_RESET));
             continue;
         }
 
         while(*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
 
         if(*end != '\0' || errno == ERANGE || choice < 0 || choice >= (long)list->count){
-            puts(COLOR_RED "Invalid choice, try again." COLOR_RESET);
+            printf("%sInvalid choice, try again.%s\n", dd_color(stdout, DD_C_RED), dd_color(stdout, DD_C_RESET));
             continue;
         }
 

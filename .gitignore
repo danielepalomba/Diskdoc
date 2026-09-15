@@ -14,9 +14,7 @@ other/
 *.env
 
 /diskdoc
-/tests/test_*
-!/tests/test_*.c
-!/tests/test_*.h
+tests/
 
 core
 core.*

@@ -63,28 +63,20 @@ install_libcurl() {
     fi
 }
 
-SYSTEM_ENV_PATH="/etc/diskdoc/.env"
+LEGACY_ENV_PATH="/etc/diskdoc/.env"
 
-setup_env_file() {
-    if [ -f "$SYSTEM_ENV_PATH" ]; then
-        echo "$SYSTEM_ENV_PATH already exists, leaving it untouched"
-        return
+warn_legacy_env() {
+    if [ -f "$LEGACY_ENV_PATH" ]; then
+        echo
+        echo "WARNING: $LEGACY_ENV_PATH still holds an API key in a system-wide file."
+        echo "Move it to your own account with 'diskdoc --set-key <provider>', then run"
+        echo "./uninstall.sh or delete the file, and rotate the key: it was reachable by"
+        echo "anyone able to run commands as root on this machine."
     fi
-
-    if [ ! -f .env-example ]; then
-        echo ".env-example not found, skipping .env setup" >&2
-        return
-    fi
-
-    as_root mkdir -p "$(dirname "$SYSTEM_ENV_PATH")"
-    as_root cp .env-example "$SYSTEM_ENV_PATH"
-    as_root chmod 600 "$SYSTEM_ENV_PATH"
-    echo "Created $SYSTEM_ENV_PATH from .env-example (edit it to add your API key)"
 }
 
 install_smartctl
 install_libcurl
-setup_env_file
 
 echo "Compiling diskdoc..."
 make
@@ -92,5 +84,11 @@ make
 echo "Installing  in /usr/local/bin (sudo required)..."
 as_root make install
 
+warn_legacy_env
+
 echo
 echo "Installation completed."
+echo
+echo "To use the AI analysis, store your API key with:"
+echo "    diskdoc --set-key <openai|anthropic|gemini>"
+echo "It is written to ~/.config/diskdoc/credentials with mode 0600."

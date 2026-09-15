@@ -3,62 +3,10 @@
 #include <string.h>
 #include <stdbool.h>
 #include <curl/curl.h>
-#include <limits.h>
 #include <cJSON.h>
 
 #include "dd_ai.h"
 #include "dd_utils.h"
-
-/* Loads the API keys set in the environment (populated from .env by load_env_file)
-   and infers the provider to use from whichever key appears first in the .env file. */
-ai_provider load_keys(key_store *ks) {
-    memset(ks, 0, sizeof(key_store));
-
-    const char *oa = getenv("OPENAI_API_KEY");
-    const char *an = getenv("ANTHROPIC_API_KEY");
-    const char *ge = getenv("GEMINI_API_KEY");
-
-    if (oa) strncpy(ks->openai_key, oa, sizeof(ks->openai_key) - 1);
-    if (an) strncpy(ks->anthropic_key, an, sizeof(ks->anthropic_key) - 1);
-    if (ge) strncpy(ks->gemini_key, ge, sizeof(ks->gemini_key) - 1);
-
-    ai_provider provider = PROVIDER_NONE;
-
-    char env_path[PATH_MAX];
-    FILE *file = resolve_dotenv_path(env_path, sizeof env_path)
-                 ? fopen(env_path, "r") : NULL;
-    if (file) {
-        char line[512];
-        while (fgets(line, sizeof(line), file)) {
-            line[strcspn(line, "\r\n")] = '\0';
-            if (line[0] == '\0' || line[0] == '#') continue;
-
-            if (strlen(ks->openai_key) > 0 && strncmp(line, "OPENAI_API_KEY", 14) == 0) {
-                provider = PROVIDER_OPENAI;
-                break;
-            }
-            if (strlen(ks->anthropic_key) > 0 && strncmp(line, "ANTHROPIC_API_KEY", 17) == 0) {
-                provider = PROVIDER_ANTHROPIC;
-                break;
-            }
-            if (strlen(ks->gemini_key) > 0 && strncmp(line, "GEMINI_API_KEY", 14) == 0) {
-                provider = PROVIDER_GEMINI;
-                break;
-            }
-        }
-        fclose(file);
-    }
-
-    /* .env could not be read: fall back
-       to whichever key made it into the environment, in a fixed order. */
-    if (provider == PROVIDER_NONE) {
-        if (strlen(ks->openai_key) > 0) provider = PROVIDER_OPENAI;
-        else if (strlen(ks->anthropic_key) > 0) provider = PROVIDER_ANTHROPIC;
-        else if (strlen(ks->gemini_key) > 0) provider = PROVIDER_GEMINI;
-    }
-
-    return provider;
-}
 
 typedef struct {
     char *data;
@@ -149,30 +97,34 @@ const char *default_model_for_provider(ai_provider provider) {
     return NULL;
 }
 
-void send_ai_prompt(const key_store *ks, const ai_request *req){
-    CURL *curl = curl_easy_init();
+/* Builds and performs the request for the selected provider. The key only
+   ever lives in the local header buffer, which is wiped on every exit path,
+   and redirects are refused so an Authorization header can never be replayed
+   against another host. */
+void send_ai_prompt(const char *api_key, const ai_request *req){
+    char auth_header[DD_AUTH_HEADER_MAX] = {0};
+    char url[512] = {0};
+    struct curl_slist *headers = NULL;
+    cJSON *root = NULL;
+    char *json_payload = NULL;
+    curl_buffer response = {0};
+    CURL *curl = NULL;
 
+    if(api_key == NULL || api_key[0] == '\0'){
+        fprintf(stderr, "[Error] No API key available for the selected provider.\n");
+        return;
+    }
+
+    curl = curl_easy_init();
     if(!curl) return;
 
-    struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Content-Type: Application/json");
-
-    char url[512];
-    cJSON *root = cJSON_CreateObject();
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    root = cJSON_CreateObject();
 
     switch(req->provider){
         case PROVIDER_OPENAI: {
-            if(strlen(ks->openai_key) == 0){
-                fprintf(stderr, "[Error] OpenAI key error.\n");
-                cJSON_Delete(root);
-                curl_slist_free_all(headers);
-                curl_easy_cleanup(curl);
-                return;
-            }
-
             snprintf(url, sizeof(url), OPENAI_URL);
-            char auth_header[300];
-            snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", ks->openai_key);
+            snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
             headers = curl_slist_append(headers, auth_header);
 
             cJSON_AddStringToObject(root, "model", req->model);
@@ -185,17 +137,8 @@ void send_ai_prompt(const key_store *ks, const ai_request *req){
         }
 
         case PROVIDER_ANTHROPIC: {
-            if (strlen(ks->anthropic_key) == 0) {
-                fprintf(stderr, "[Error] Anthropic Key error.\n");
-                cJSON_Delete(root);
-                curl_slist_free_all(headers);
-                curl_easy_cleanup(curl);
-                return;
-            }
-
             snprintf(url, sizeof(url), ANTHROPIC_URL);
-            char auth_header[300];
-            snprintf(auth_header, sizeof(auth_header), "x-api-key: %s", ks->anthropic_key);
+            snprintf(auth_header, sizeof(auth_header), "x-api-key: %s", api_key);
             headers = curl_slist_append(headers, auth_header);
             headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
 
@@ -210,15 +153,9 @@ void send_ai_prompt(const key_store *ks, const ai_request *req){
         }
 
         case PROVIDER_GEMINI: {
-            if (strlen(ks->gemini_key) == 0) {
-                fprintf(stderr, "[Error] Gemini Key error.\n");
-                cJSON_Delete(root);
-                curl_slist_free_all(headers);
-                curl_easy_cleanup(curl);
-                return;
-            }
-
-            snprintf(url, sizeof(url), GEMINI_URL, req->model, ks->gemini_key);
+            snprintf(url, sizeof(url), GEMINI_URL, req->model);
+            snprintf(auth_header, sizeof(auth_header), "x-goog-api-key: %s", api_key);
+            headers = curl_slist_append(headers, auth_header);
 
             cJSON *contents = cJSON_AddArrayToObject(root, "contents");
             cJSON *content_item = cJSON_CreateObject();
@@ -231,21 +168,24 @@ void send_ai_prompt(const key_store *ks, const ai_request *req){
         }
 
         case PROVIDER_NONE:
+        default:
             fprintf(stderr, "[Error] No AI provider selected.\n");
-            cJSON_Delete(root);
-            curl_slist_free_all(headers);
-            curl_easy_cleanup(curl);
-            return;
+            goto cleanup;
     }
 
-    char *json_payload = cJSON_PrintUnformatted(root);
-    curl_buffer response = {0};
+    json_payload = cJSON_PrintUnformatted(root);
+    if(json_payload == NULL) goto cleanup;
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_payload);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, DD_HTTP_TIMEOUT_SECONDS);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
     CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK) {
@@ -253,6 +193,9 @@ void send_ai_prompt(const key_store *ks, const ai_request *req){
     } else {
         print_ai_response(req->provider, response.data);
     }
+
+cleanup:
+    dd_wipe(auth_header, sizeof auth_header);
 
     free(response.data);
     free(json_payload);

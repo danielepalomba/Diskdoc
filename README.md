@@ -29,7 +29,7 @@ You can install the program, using the installation script or you can compile it
 ./install.sh
 ```
 
-Once installed, run it from anywhere with `sudo diskdoc`. If you want to use an AI model to perform the analysis, enter your API key in `/etc/diskdoc/.env` (created by `install.sh` from `.env-example`) — diskdoc reads it regardless of which directory it's run from.
+Once installed, run it from anywhere with `sudo diskdoc`. If you want to use an AI model to perform the analysis, store your API key with `diskdoc --set-key <provider>`: it is written to `~/.config/diskdoc/credentials` with mode `0600`, under your own account and not system-wide.
 
 ### Manual build
 
@@ -43,31 +43,53 @@ sudo make install   # copy it to /usr/local/bin/diskdoc
 ### Uninstall
 
 ```sh
-sudo make uninstall
+./uninstall.sh            # keeps your API key
+./uninstall.sh --purge    # deletes ~/.config/diskdoc/credentials too
 ```
+
+The key is your own credential, not something the installer created, so it survives an uninstall unless you ask for `--purge`. `sudo make uninstall` removes just the binary.
 
 ## Usage
 
 ```
-Usage: diskdoc [-h] [-a] [-q] [i] [-d <device>]
+Usage: diskdoc [-h] [-a] [-q] [-i] [-d <device>]
        diskdoc -t <short|long> <device>
+       diskdoc -k <openai|anthropic|gemini>
 
   -h, --help            show this help message and exit
   -a, --all             analyze every detected physical disk
   -q, --quiet           only print the summary line per disk, skip the detailed report
-  -i, --ai              analyze a device with an AI model, using the API key set in /etc/diskdoc/.env
+  -i, --ai              analyze a device with an AI model, using your stored API key
   -d, --device <name>   analyze a single device by kernel name (e.g. sda)
   -t, --test <mode>     start a short or long self-test on <device> (e.g. -t short nvme0)
+  -k, --set-key <prov>  store the API key of a provider, read from the terminal
 
 With no options, diskdoc scans the disks and lets you pick one interactively.
--t cannot be combined with any other option.
+-t and -k cannot be combined with any other option.
 ```
 
 **Since reading SMART data usually requires root, run diskdoc with `sudo`.**
 
 ### AI models
 
-`-i/--ai` picks the provider from whichever API key is set in `.env`, and uses a fixed default model for it. diskdoc looks for a project-local `.env` first (walking up from the current directory, handy when running from a source checkout), then falls back to `/etc/diskdoc/.env` so it also works when launched from anywhere else:
+`-i/--ai` sends the smartctl report to a model and prints its answer. Store your key once:
+
+```sh
+diskdoc --set-key openai       # or anthropic, or gemini
+```
+
+The key is asked for on the terminal without echo and saved in `~/.config/diskdoc/credentials`, readable by you only. If you store more than one key, add a line `DISKDOC_PROVIDER=openai` to that same file to choose which one `-i` uses.
+
+diskdoc looks for a key in this order and stops at the first one it finds:
+
+1. the command in `DISKDOC_API_KEY_CMD`, if you prefer keeping the key in your own password manager (`export DISKDOC_API_KEY_CMD='pass show openai/api'`, together with `DISKDOC_PROVIDER`);
+2. `~/.config/diskdoc/credentials`;
+3. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` exported in your environment;
+4. `/etc/diskdoc/.env`, deprecated: it is only read to tell you to move the key.
+
+Sources 1 and 3 live in the environment, which `sudo` wipes: pass them through with `sudo -E` or use the credentials file, which always works.
+
+Each provider uses a fixed default model:
 
 | Provider  | Default model     |
 |-----------|--------------------|

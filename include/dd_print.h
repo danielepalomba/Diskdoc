@@ -1,14 +1,20 @@
 #ifndef DD_PRINT_H
 #define DD_PRINT_H
 
+#include <stdio.h>
+
 #include "dd_report.h"
 
-/* ANSI Colors */
-#define COLOR_RED     "\x1b[31m"
-#define COLOR_GREEN   "\x1b[32m"
-#define COLOR_YELLOW  "\x1b[33m"
-#define COLOR_DIM     "\x1b[2m"
-#define COLOR_RESET   "\x1b[0m"
+typedef enum {
+    DD_C_RED,
+    DD_C_GREEN,
+    DD_C_YELLOW,
+    DD_C_DIM,
+    DD_C_RESET
+} dd_color_id;
+
+void dd_color_init(void);
+const char *dd_color(FILE *stream, dd_color_id color);
 
 /* Fixed width label, so the values line up in a column */
 #define DD_FIELD "  %-24s"

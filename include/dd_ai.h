@@ -17,9 +17,12 @@
     "\n--- SMARTCTL JSON OUTPUT ---\n" \
     "%s\n"
 
+/* Longest header is "Authorization: Bearer <key>" */
+#define DD_AUTH_HEADER_MAX 320
+
 #define OPENAI_URL "https://api.openai.com/v1/chat/completions"
 #define ANTHROPIC_URL "https://api.anthropic.com/v1/messages"
-#define GEMINI_URL "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s"
+#define GEMINI_URL "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 
 typedef enum {
     PROVIDER_NONE = -1,
@@ -29,25 +32,19 @@ typedef enum {
 } ai_provider;
 
 typedef struct {
-    char openai_key[256];
-    char anthropic_key[256];
-    char gemini_key[256];
-} key_store;
-
-typedef struct {
     ai_provider provider;
     const char *model;
     const char *prompt;
 } ai_request;
 
+#define DD_HTTP_TIMEOUT_SECONDS 60L
+
 #define OPENAI_DEFAULT_MODEL "gpt-4o-mini"
 #define ANTHROPIC_DEFAULT_MODEL "claude-sonnet-5"
 #define GEMINI_DEFAULT_MODEL "gemini-1.5-flash"
 
-ai_provider load_keys(key_store *ks);
-
 const char *default_model_for_provider(ai_provider provider);
 
-void send_ai_prompt(const key_store *ks, const ai_request *req);
+void send_ai_prompt(const char *api_key, const ai_request *req);
 
 #endif

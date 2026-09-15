@@ -2,14 +2,27 @@
 #define DD_UTILS_H
 
 #include <stddef.h>
+#include <stdio.h>
+#include <sys/types.h>
 
-/* System-wide config installed by install.sh */
-#define DD_SYSTEM_ENV_PATH "/etc/diskdoc/.env"
+/* Only kept so old installations can be migrated away from it: diskdoc
+   no longer creates this file and reading it is deprecated. */
+#define DD_LEGACY_ENV_PATH "/etc/diskdoc/.env"
 
-void load_env_file(const char *filepath);
+#define DD_ENV_LINE_MAX 512
 
-int find_dotenv_path(const char *filename, char *out_path, size_t out_size);
+typedef void (*dd_env_sink)(const char *key, const char *value, void *ctx);
 
-int resolve_dotenv_path(char *out_path, size_t out_size);
+FILE *dd_open_private_file(const char *path, uid_t owner_uid);
+
+void dd_parse_env_stream(FILE *file, dd_env_sink sink, void *ctx);
+
+void dd_wipe(void *buf, size_t size);
+
+int dd_real_user(uid_t *uid, gid_t *gid);
+
+int dd_drop_privileges(void);
+
+int dd_user_config_dir(char *out, size_t out_size);
 
 #endif
